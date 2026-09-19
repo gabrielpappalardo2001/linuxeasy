@@ -1,0 +1,17 @@
+# Interfaccia grafica: richiede le librerie di sistema GTK4 e libadwaita
+# (su Debian/Ubuntu: apt install gir1.2-gtk-4.0 gir1.2-adw-1 python3-gi)
+PyGObject>=3.48
+
+# Motore di riproduzione: richiede mpv installato a livello di sistema
+# (su Debian/Ubuntu: apt install mpv libmpv2, o libmpv1 a seconda della distro)
+python-mpv>=1.0
+
+# Sistema notizie
+requests>=2.31
+beautifulsoup4>=4.12
+feedparser>=6.0
+trafilatura>=2.1.0
+
+# Per usare YouTube tramite mpv serve anche yt-dlp installato a livello
+# di sistema (o via pip): mpv lo richiama internamente tramite l'hook ytdl.
+yt-dlp

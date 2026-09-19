@@ -2,7 +2,7 @@ from functools import partial
 
 from app.core.log import scrivi_log
 from app.core.mpv_engine import TrackInfo
-from app.youtube.youtube_library import SavedVideo, da_risultato
+from app.youtube.youtube_library import da_risultato
 from app.youtube.youtube_search import ErroreYouTube
 
 ERRORE_SERVIZIO = "Impossibile contattare YouTube. Riprovare più tardi."

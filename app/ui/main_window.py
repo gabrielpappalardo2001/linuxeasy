@@ -1,3 +1,7 @@
+from app.core.log import installa_gestori_globali, scrivi_log
+
+installa_gestori_globali()
+
 import shutil
 import subprocess
 import threading
@@ -24,7 +28,6 @@ from app.agenda.agenda_store import AgendaStore
 from app.core.database import Database
 from app.core.gestore_file import GestoreFile
 from app.core.impostazioni import Impostazioni
-from app.core.log import installa_gestori_globali, scrivi_log
 from app.core.mpv_engine import MPVEngine, assicura_configurazione_globale
 from app.librivox.librivox_catalog import LibriVoxCatalog
 from app.librivox.librivox_downloads import LibriVoxDownloads
@@ -93,7 +96,6 @@ ALTEZZA_AREA_VIDEO = 360
 class MainWindow(Gtk.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title=NOME_PROGRAMMA)
-        installa_gestori_globali()
         self.history = []
         self.current_items = []
         self.current_source = []
@@ -105,6 +107,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._navigazione = 0
         self._timer_stato = 0
         self._annunci_disponibili = False
+        self._video_presente = False
         self.box = None
         self.label = None
         self.listbox = None
@@ -582,15 +585,22 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _aggiorna_area_video(self, presente):
         try:
+            self._video_presente = bool(presente)
+            self._applica_visibilita_video()
+        except Exception as ex:
+            scrivi_log("MainWindow._aggiorna_area_video", ex)
+        return False
+
+    def _applica_visibilita_video(self):
+        try:
             if self.area_video is None:
-                return False
-            if presente and self.engine is not None and self.engine.ha_finestra_incastonata():
+                return
+            if self._video_presente and self.engine is not None and self.engine.ha_finestra_incastonata():
                 self.area_video.show()
             else:
                 self.area_video.hide()
         except Exception as ex:
-            scrivi_log("MainWindow._aggiorna_area_video", ex)
-        return False
+            scrivi_log("MainWindow._applica_visibilita_video", ex)
 
     def _titolo_player(self):
         try:
@@ -761,7 +771,35 @@ class MainWindow(Gtk.ApplicationWindow):
             return ""
 
     def in_pagina(self):
-        return isinstance(self.current_source, PaginaTesto)
+        try:
+            return isinstance(self.current_source, PaginaTesto)
+        except Exception as ex:
+            scrivi_log("MainWindow.in_pagina", ex)
+            return False
+
+    def _thread_principale(self):
+        try:
+            return threading.current_thread() is threading.main_thread()
+        except Exception as ex:
+            scrivi_log("MainWindow._thread_principale", ex)
+            return True
+
+    def _rimanda_al_thread_principale(self, funzione, *argomenti):
+        try:
+            if self._thread_principale():
+                return False
+            GLib.idle_add(self._esegui_in_idle, funzione, argomenti)
+            return True
+        except Exception as ex:
+            scrivi_log("MainWindow._rimanda_al_thread_principale", ex)
+            return True
+
+    def _esegui_in_idle(self, funzione, argomenti):
+        try:
+            funzione(*argomenti)
+        except Exception as ex:
+            scrivi_log("MainWindow._esegui_in_idle", ex)
+        return False
 
     def get_current_selected_index(self):
         try:
@@ -897,6 +935,7 @@ class MainWindow(Gtk.ApplicationWindow):
                     accessibile_riga.set_name(self._nome_accessibile_riga(etichetta, indice))
                 self.listbox.add(riga)
             self.show_all()
+            self._applica_visibilita_video()
             self.stack.set_visible_child_name(VISTA_LISTA)
             indice = self.menu_positions.get(titolo, 0)
             if indice < 0 or indice >= len(voci):
@@ -921,6 +960,7 @@ class MainWindow(Gtk.ApplicationWindow):
             if accessibile is not None:
                 accessibile.set_name(titolo)
             self.show_all()
+            self._applica_visibilita_video()
             self.stack.set_visible_child_name(VISTA_TESTO)
             posizione = max(0, min(int(pagina.posizione or 0), buffer.get_char_count()))
             buffer.place_cursor(buffer.get_iter_at_offset(posizione))
@@ -1547,6 +1587,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def notifica_nuovi_episodi(self, episodi):
         try:
+            if self._rimanda_al_thread_principale(self.notifica_nuovi_episodi, episodi):
+                return
             if not episodi or not self._notifiche_attive("podcast"):
                 return
             if len(episodi) == 1:
@@ -1565,6 +1607,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def notifica_nuove_notizie(self, articoli):
         try:
+            if self._rimanda_al_thread_principale(self.notifica_nuove_notizie, articoli):
+                return
             if not articoli or not self._notifiche_attive("notizie"):
                 return
             if len(articoli) == 1:
@@ -1603,10 +1647,16 @@ class MainWindow(Gtk.ApplicationWindow):
             return f"Adesso: {titolo}{luogo}, alle {orario}"
         except Exception as ex:
             scrivi_log("MainWindow._testo_appuntamento", ex)
-            return str(getattr(occorrenza.evento, "titolo", "Appuntamento"))
+            try:
+                return str(getattr(getattr(occorrenza, "evento", None), "titolo", None) or "Appuntamento")
+            except Exception as ex_titolo:
+                scrivi_log("MainWindow._testo_appuntamento titolo", ex_titolo)
+                return "Appuntamento"
 
     def notifica_appuntamenti(self, elenco):
         try:
+            if self._rimanda_al_thread_principale(self.notifica_appuntamenti, elenco):
+                return
             if not elenco or not self._notifiche_attive("agenda"):
                 return
             frasi = [self._testo_appuntamento(occorrenza, tipo) for occorrenza, tipo in elenco]
@@ -1639,6 +1689,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _download_completato(self, episodio):
         try:
+            if self._rimanda_al_thread_principale(self._download_completato, episodio):
+                return
             if self.titolo_corrente() in ("Download in corso", "Episodi scaricati") and not self.in_pagina():
                 self.ricarica_menu_corrente(annuncia_vuoto=False)
             self.mostra_stato(f"Download completato: {episodio.title}")
@@ -1647,6 +1699,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _download_fallito(self, episodio):
         try:
+            if self._rimanda_al_thread_principale(self._download_fallito, episodio):
+                return
             if self.titolo_corrente() == "Download in corso" and not self.in_pagina():
                 self.ricarica_menu_corrente(annuncia_vuoto=False)
             self.mostra_stato(f"Download non riuscito: {episodio.title}")
@@ -1655,6 +1709,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _audiolibro_scaricato(self, libro):
         try:
+            if self._rimanda_al_thread_principale(self._audiolibro_scaricato, libro):
+                return
             if self.librivox_view is not None:
                 self.librivox_view.download_completato(libro)
         except Exception as ex:
@@ -1662,6 +1718,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _audiolibro_non_scaricato(self, libro):
         try:
+            if self._rimanda_al_thread_principale(self._audiolibro_non_scaricato, libro):
+                return
             if self.librivox_view is not None:
                 self.librivox_view.download_fallito(libro)
         except Exception as ex:

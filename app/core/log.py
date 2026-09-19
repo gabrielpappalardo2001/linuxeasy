@@ -8,6 +8,14 @@ from app.core import percorsi
 
 _logger = None
 _blocco = threading.Lock()
+_gestori_installati = False
+
+
+def _scrivi_stderr(testo):
+    try:
+        sys.stderr.write(f"{testo}\n")
+    except Exception:
+        pass
 
 
 def _ottieni_logger():
@@ -28,10 +36,7 @@ def _ottieni_logger():
                     encoding="utf-8",
                 )
             except Exception as ex:
-                try:
-                    sys.stderr.write(f"Log su file non disponibile: {ex}\n")
-                except Exception:
-                    pass
+                _scrivi_stderr(f"Log su file non disponibile: {ex}")
                 gestore = logging.StreamHandler(sys.stderr)
             gestore.setFormatter(logging.Formatter("%(asctime)s | %(threadName)s | %(message)s"))
             registratore.addHandler(gestore)
@@ -39,20 +44,22 @@ def _ottieni_logger():
     return _logger
 
 
+def _formatta(tipo, valore, traccia):
+    try:
+        return "".join(traceback.format_exception(tipo, valore, traccia))
+    except Exception as ex:
+        return f"Traccia non disponibile: {ex}"
+
+
 def scrivi_log(contesto, eccezione=None):
     try:
         testo = str(contesto)
         if eccezione is not None:
-            dettaglio = "".join(
-                traceback.format_exception(type(eccezione), eccezione, eccezione.__traceback__)
-            )
+            dettaglio = _formatta(type(eccezione), eccezione, eccezione.__traceback__)
             testo = f"{contesto} | {type(eccezione).__name__}: {eccezione}\n{dettaglio}"
         _ottieni_logger().error(testo)
     except Exception as ex:
-        try:
-            sys.stderr.write(f"Errore nella scrittura del log: {ex} | {contesto}\n")
-        except Exception:
-            pass
+        _scrivi_stderr(f"Errore nella scrittura del log: {ex} | {contesto}")
 
 
 def _eccezione_non_gestita(tipo, valore, traccia):
@@ -60,32 +67,45 @@ def _eccezione_non_gestita(tipo, valore, traccia):
         if issubclass(tipo, KeyboardInterrupt):
             sys.__excepthook__(tipo, valore, traccia)
             return
-        dettaglio = "".join(traceback.format_exception(tipo, valore, traccia))
+        dettaglio = _formatta(tipo, valore, traccia)
         _ottieni_logger().error(f"Eccezione non gestita | {tipo.__name__}: {valore}\n{dettaglio}")
+        _scrivi_stderr(dettaglio)
     except Exception as ex:
-        try:
-            sys.stderr.write(f"Errore nel gestore globale: {ex}\n")
-        except Exception:
-            pass
+        _scrivi_stderr(f"Errore nel gestore globale: {ex}")
 
 
 def _eccezione_thread(argomenti):
     try:
-        dettaglio = "".join(
-            traceback.format_exception(argomenti.exc_type, argomenti.exc_value, argomenti.exc_traceback)
-        )
+        if argomenti.exc_type is SystemExit:
+            return
+        dettaglio = _formatta(argomenti.exc_type, argomenti.exc_value, argomenti.exc_traceback)
         nome = argomenti.thread.name if argomenti.thread is not None else "sconosciuto"
-        _ottieni_logger().error(f"Eccezione non gestita nel thread {nome} | {argomenti.exc_value}\n{dettaglio}")
+        tipo = argomenti.exc_type.__name__ if argomenti.exc_type is not None else "Eccezione"
+        _ottieni_logger().error(f"Eccezione non gestita nel thread {nome} | {tipo}: {argomenti.exc_value}\n{dettaglio}")
     except Exception as ex:
-        try:
-            sys.stderr.write(f"Errore nel gestore dei thread: {ex}\n")
-        except Exception:
-            pass
+        _scrivi_stderr(f"Errore nel gestore dei thread: {ex}")
+
+
+def _eccezione_non_sollevabile(argomenti):
+    try:
+        tipo = argomenti.exc_type
+        dettaglio = _formatta(tipo, argomenti.exc_value, argomenti.exc_traceback)
+        messaggio = argomenti.err_msg or "Eccezione ignorata"
+        oggetto = repr(argomenti.object) if argomenti.object is not None else ""
+        nome = tipo.__name__ if tipo is not None else "Eccezione"
+        _ottieni_logger().error(f"{messaggio} {oggetto} | {nome}: {argomenti.exc_value}\n{dettaglio}")
+    except Exception as ex:
+        _scrivi_stderr(f"Errore nel gestore delle eccezioni ignorate: {ex}")
 
 
 def installa_gestori_globali():
+    global _gestori_installati
     try:
+        if _gestori_installati:
+            return
         sys.excepthook = _eccezione_non_gestita
         threading.excepthook = _eccezione_thread
+        sys.unraisablehook = _eccezione_non_sollevabile
+        _gestori_installati = True
     except Exception as ex:
         scrivi_log("log.installa_gestori_globali", ex)

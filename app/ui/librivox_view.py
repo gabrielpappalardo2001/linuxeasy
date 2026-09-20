@@ -606,22 +606,6 @@ class LibriVoxView:
             scrivi_log("LibriVoxView._etichetta_capitolo", ex)
             return str(getattr(capitolo, "title", ""))
 
-    def _voci_capitoli(self, libro, capitoli):
-        voci = []
-        try:
-            elenco = list(capitoli or [])
-            for indice, capitolo in enumerate(elenco):
-                voci.append(
-                    (
-                        self._etichetta_capitolo(capitolo),
-                        partial(self.riproduci, libro, elenco, indice),
-                        partial(self._azioni_capitolo, libro, elenco, indice),
-                    )
-                )
-        except Exception as ex:
-            scrivi_log("LibriVoxView._voci_capitoli", ex)
-        return voci
-
     def _azioni_capitolo(self, libro, capitoli, indice):
         try:
             azioni = [("Ascolta da questo capitolo", partial(self.riproduci, libro, capitoli, indice), None)]
@@ -647,20 +631,144 @@ class LibriVoxView:
 
     def apri_libro(self, libro, indice=None):
         try:
-            if indice is None:
-                progresso = self.libreria.progresso(libro.id)
-                indice = progresso["capitolo"] if progresso is not None else None
-            if indice is not None:
-                self.finestra.menu_positions[libro.title] = int(indice)
+            stato = self.downloads.stato(libro.id) if self.downloads is not None else None
+            if stato == scaricamenti.STATO_COMPLETATO:
+                self.finestra.push_menu(libro.title, partial(self._voci_libro_scaricato, libro), None)
+                return
+            if stato in (scaricamenti.STATO_IN_CORSO, scaricamenti.STATO_IN_CODA):
+                self.finestra.mostra_messaggio(
+                    "Il download dell'audiolibro è già in corso.",
+                    f'È possibile seguirne l\'avanzamento da "{TITOLO_DOWNLOAD}" nel menu LibriVox.',
+                )
+                return
+            if stato == scaricamenti.STATO_ERRORE:
+                if self.finestra.chiedi_conferma(f"Il download di {libro.title} non è riuscito. Riprovare il download?"):
+                    self.riprova_download(libro)
+                return
+            if self.finestra.chiedi_conferma(
+                f"Scaricare l'audiolibro {libro.title}?",
+                "Il download avviene in background: nel frattempo il programma resta utilizzabile.",
+            ):
+                self.scarica(libro)
+        except Exception as ex:
+            scrivi_log(f"LibriVoxView.apri_libro ({getattr(libro, 'id', '')})", ex)
+
+    def _voci_libro_scaricato(self, libro):
+        try:
+            return [
+                ("Ascolta", partial(self.apri_menu_ascolto, libro), None),
+                ("Elimina l'audiolibro scaricato", partial(self.elimina_download, libro), None),
+            ]
+        except Exception as ex:
+            scrivi_log(f"LibriVoxView._voci_libro_scaricato ({getattr(libro, 'id', '')})", ex)
+            return []
+
+    def apri_menu_ascolto(self, libro):
+        try:
+            self.finestra.push_menu(libro.title, partial(self._voci_menu_ascolto, libro), None)
+        except Exception as ex:
+            scrivi_log(f"LibriVoxView.apri_menu_ascolto ({getattr(libro, 'id', '')})", ex)
+
+    def _voci_menu_ascolto(self, libro):
+        try:
+            return [
+                ("Ascolta l'intero libro", partial(self.ascolta_intero, libro), None),
+                ("Ascolta per capitoli", partial(self.apri_capitoli, libro), None),
+            ]
+        except Exception as ex:
+            scrivi_log(f"LibriVoxView._voci_menu_ascolto ({getattr(libro, 'id', '')})", ex)
+            return []
+
+    def ascolta_intero(self, libro):
+        try:
+            self.finestra.mostra_stato(f"Caricamento dei capitoli di {libro.title}.")
+            threading.Thread(
+                target=self._carica_ascolto_intero,
+                args=(libro,),
+                name="AscoltoIntegraleLibriVox",
+                daemon=True,
+            ).start()
+        except Exception as ex:
+            scrivi_log(f"LibriVoxView.ascolta_intero ({getattr(libro, 'id', '')})", ex)
+
+    def _carica_ascolto_intero(self, libro):
+        capitoli = []
+        try:
+            capitoli = self._lettura_capitoli(libro)
+        except Exception as ex:
+            scrivi_log(f"LibriVoxView._carica_ascolto_intero ({libro.id})", ex)
+        try:
+            GLib.idle_add(self._avvia_ascolto_intero, libro, capitoli)
+        except Exception as ex:
+            scrivi_log("LibriVoxView._carica_ascolto_intero consegna", ex)
+
+    def _avvia_ascolto_intero(self, libro, capitoli):
+        try:
+            if not capitoli:
+                self.finestra.mostra_messaggio("Impossibile leggere i capitoli dell'audiolibro.", ERRORE_RETE)
+                return False
+            self.riproduci(libro, capitoli, 0)
+        except Exception as ex:
+            scrivi_log(f"LibriVoxView._avvia_ascolto_intero ({getattr(libro, 'id', '')})", ex)
+        return False
+
+    def apri_capitoli(self, libro):
+        try:
             self.finestra.carica_in_background(
                 libro.title,
                 partial(self._lettura_capitoli, libro),
-                partial(self._voci_capitoli, libro),
+                partial(self._voci_capitoli_selezione, libro),
                 "Nessun capitolo trovato per questo audiolibro.",
                 ERRORE_RETE,
+                selezione=True,
             )
         except Exception as ex:
-            scrivi_log(f"LibriVoxView.apri_libro ({getattr(libro, 'id', '')})", ex)
+            scrivi_log(f"LibriVoxView.apri_capitoli ({getattr(libro, 'id', '')})", ex)
+
+    def _voci_capitoli_selezione(self, libro, capitoli):
+        voci = []
+        try:
+            elenco = list(capitoli or [])
+            for indice, capitolo in enumerate(elenco):
+                voci.append(
+                    (
+                        self._etichetta_capitolo(capitolo),
+                        partial(self.riproduci_selezione, libro, elenco, indice),
+                        partial(self._azioni_capitolo, libro, elenco, indice),
+                    )
+                )
+        except Exception as ex:
+            scrivi_log("LibriVoxView._voci_capitoli_selezione", ex)
+        return voci
+
+    def riproduci_selezione(self, libro, capitoli, indice):
+        try:
+            if not 0 <= indice < len(capitoli):
+                return
+            selezionati = self.finestra.get_selected_indices() if hasattr(self.finestra, "get_selected_indices") else []
+            selezionati = [i for i in selezionati if 0 <= i < len(capitoli)]
+            if selezionati:
+                indici = selezionati if indice in selezionati else sorted(set(selezionati) | {indice})
+            else:
+                indici = [indice]
+            sotto_elenco = [capitoli[i] for i in indici]
+            avvio = indici.index(indice)
+            tracce = [TrackInfo(title=capitolo.title, album=libro.title, url=capitolo.url) for capitolo in sotto_elenco]
+            if self.engine is None or not self.engine.load_playlist(tracce, avvio, kind=TIPO_ASCOLTO):
+                self.finestra.mostra_messaggio("Impossibile avviare la riproduzione.", "Verificare che mpv sia installato.")
+                return
+            self._ascolto = {"libro": libro, "capitoli": sotto_elenco}
+            self.libreria.registra_ascolto(libro, avvio, sotto_elenco[avvio].title)
+            if len(sotto_elenco) > 1:
+                self.finestra.mostra_stato(
+                    f"In ascolto: {libro.title} ({conta(len(sotto_elenco), 'capitolo selezionato', 'capitoli selezionati')}). "
+                    "Ctrl+F per il capitolo successivo, Ctrl+B per il precedente."
+                )
+            else:
+                self.finestra.mostra_stato(f"In ascolto: {libro.title}, {sotto_elenco[avvio].title}.")
+            self.finestra.apri_player()
+        except Exception as ex:
+            scrivi_log(f"LibriVoxView.riproduci_selezione ({getattr(libro, 'id', '')})", ex)
 
     def riproduci(self, libro, capitoli, indice):
         try:

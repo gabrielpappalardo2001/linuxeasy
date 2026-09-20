@@ -915,9 +915,9 @@ class MainWindow(Gtk.ApplicationWindow):
             self._aggiorna_riga(indice)
             totale = len(self.selected_indices)
             if totale == 1:
-                self.annuncia(f"{etichetta}, {stato}. 1 video selezionato.")
+                self.annuncia(f"{etichetta}, {stato}. 1 elemento selezionato.")
             elif totale > 1:
-                self.annuncia(f"{etichetta}, {stato}. {totale} video selezionati.")
+                self.annuncia(f"{etichetta}, {stato}. {totale} elementi selezionati.")
             else:
                 self.annuncia(f"{etichetta}, {stato}.")
         except Exception as ex:
@@ -1261,6 +1261,12 @@ class MainWindow(Gtk.ApplicationWindow):
                     if selected:
                         self._alterna_selezione(selected.get_index())
                     return True
+                return False
+            if keyname == "space" and not event.state & Gdk.ModifierType.SHIFT_MASK:
+                if self.player_screen_active and not self.in_pagina():
+                    if self.engine is not None and self.engine.is_loaded():
+                        self._player_toggle_pausa()
+                        return True
                 return False
             if keyname in TASTI_INVIO:
                 if self.in_pagina():

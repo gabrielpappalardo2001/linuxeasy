@@ -5,6 +5,7 @@ from app.core.log import scrivi_log
 from app.radio import regioni
 
 ERRORE_SERVIZIO = "Impossibile contattare il servizio delle radio. Riprovare più tardi."
+ERRORE_LOG = "I dettagli sono nel file di log."
 
 
 class RadioView:
@@ -12,6 +13,16 @@ class RadioView:
         self.finestra = finestra
         self.manager = radio_manager
         self.engine = engine
+
+    def _operazione(self, testo_ok, testo_errore, funzione, *argomenti):
+        try:
+            if funzione(*argomenti):
+                self.finestra.mostra_stato(testo_ok)
+            else:
+                self.finestra.mostra_messaggio(testo_errore, ERRORE_LOG)
+        except Exception as ex:
+            scrivi_log(f"{self.__class__.__name__}._operazione ({testo_ok})", ex)
+            self.finestra.mostra_messaggio(testo_errore, ERRORE_LOG)
 
     def get_menu_items(self):
         try:
@@ -67,11 +78,35 @@ class RadioView:
         try:
             azioni = [("Riproduci", partial(self.riproduci, stazione), None)]
             if self.manager.is_favorite(stazione.get("url")):
-                azioni.append(("Rimuovi dalle radio preferite", partial(self.manager.remove_favorite, stazione), None))
+                azioni.append(
+                    (
+                        "Rimuovi dalle radio preferite",
+                        partial(
+                            self._operazione,
+                            "Radio rimossa dalle preferite.",
+                            "Impossibile rimuovere la radio dalle preferite.",
+                            self.manager.remove_favorite,
+                            stazione,
+                        ),
+                        None,
+                    )
+                )
             else:
                 azioni.append(("Aggiungi alle radio preferite", partial(self.aggiungi_preferita, stazione), None))
             if recenti:
-                azioni.append(("Rimuovi dalle radio recenti", partial(self.manager.remove_recent, stazione), None))
+                azioni.append(
+                    (
+                        "Rimuovi dalle radio recenti",
+                        partial(
+                            self._operazione,
+                            "Radio rimossa dai recenti.",
+                            "Impossibile rimuovere la radio dai recenti.",
+                            self.manager.remove_recent,
+                            stazione,
+                        ),
+                        None,
+                    )
+                )
                 azioni.append(("Svuota le radio recenti", self.svuota_recenti, None))
             return azioni
         except Exception as ex:
@@ -83,6 +118,7 @@ class RadioView:
             url = stazione.get("url", "")
             nome = stazione.get("name", "") or url
             if not url:
+                self.finestra.mostra_messaggio("La radio non ha un indirizzo valido.")
                 return
             if self.engine is None or self.engine.play(url, nome, kind="stream") is False:
                 self.finestra.mostra_messaggio("Impossibile avviare la riproduzione.", "Verificare che mpv sia installato.")
@@ -102,7 +138,7 @@ class RadioView:
             if self.manager.add_favorite({"name": stazione.get("name", ""), "url": stazione.get("url", "")}):
                 self.finestra.mostra_stato("Radio aggiunta alle preferite.")
             else:
-                self.finestra.mostra_messaggio("Impossibile aggiungere la radio alle preferite.")
+                self.finestra.mostra_messaggio("Impossibile aggiungere la radio alle preferite.", ERRORE_LOG)
         except Exception as ex:
             scrivi_log("RadioView.aggiungi_preferita", ex)
 
@@ -201,7 +237,17 @@ class RadioView:
                         partial(self.esegui_ricerca, testo),
                         [
                             ("Cerca di nuovo", partial(self.esegui_ricerca, testo), None),
-                            ("Rimuovi dalle ricerche recenti", partial(self.manager.remove_search_history, testo), None),
+                            (
+                                "Rimuovi dalle ricerche recenti",
+                                partial(
+                                    self._operazione,
+                                    "Ricerca rimossa dalle recenti.",
+                                    "Impossibile rimuovere la ricerca.",
+                                    self.manager.remove_search_history,
+                                    testo,
+                                ),
+                                None,
+                            ),
                             ("Svuota le ricerche recenti", self.svuota_ricerche, None),
                         ],
                     )
@@ -213,7 +259,11 @@ class RadioView:
     def svuota_ricerche(self):
         try:
             if self.finestra.chiedi_conferma("Svuotare le ricerche recenti di radio?"):
-                self.manager.clear_search_history()
+                self._operazione(
+                    "Ricerche recenti svuotate.",
+                    "Impossibile svuotare le ricerche recenti.",
+                    self.manager.clear_search_history,
+                )
         except Exception as ex:
             scrivi_log("RadioView.svuota_ricerche", ex)
 
@@ -240,6 +290,10 @@ class RadioView:
     def svuota_recenti(self):
         try:
             if self.finestra.chiedi_conferma("Svuotare l'elenco delle radio recenti?"):
-                self.manager.clear_recent()
+                self._operazione(
+                    "Elenco delle radio recenti svuotato.",
+                    "Impossibile svuotare l'elenco delle radio recenti.",
+                    self.manager.clear_recent,
+                )
         except Exception as ex:
             scrivi_log("RadioView.svuota_recenti", ex)

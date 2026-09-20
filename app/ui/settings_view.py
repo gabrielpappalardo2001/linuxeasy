@@ -149,6 +149,7 @@ class SettingsView:
             if not nuovo:
                 self.finestra.nascondi_avviso_episodi()
             self._aggiorna_menu()
+            self.finestra.mostra_stato(f"Notifiche dei nuovi episodi podcast {self._stato_femminile(nuovo)}.")
         except Exception as ex:
             scrivi_log("SettingsView.alterna_notifiche_podcast", ex)
 
@@ -160,6 +161,7 @@ class SettingsView:
             if not nuovo:
                 self.finestra.nascondi_avviso_notizie()
             self._aggiorna_menu()
+            self.finestra.mostra_stato(f"Notifiche delle nuove notizie {self._stato_femminile(nuovo)}.")
         except Exception as ex:
             scrivi_log("SettingsView.alterna_notifiche_notizie", ex)
 
@@ -171,6 +173,7 @@ class SettingsView:
             if not nuovo:
                 self.finestra.nascondi_avviso_agenda()
             self._aggiorna_menu()
+            self.finestra.mostra_stato(f"Notifiche degli appuntamenti {self._stato_femminile(nuovo)}.")
         except Exception as ex:
             scrivi_log("SettingsView.alterna_notifiche_agenda", ex)
 
@@ -182,6 +185,7 @@ class SettingsView:
             if nuovo and self.engine is not None:
                 self.engine.memorizza_volume()
             self._aggiorna_menu()
+            self.finestra.mostra_stato(f"Ricorda il volume {self._stato_maschile(nuovo)}.")
         except Exception as ex:
             scrivi_log("SettingsView.alterna_ricorda_volume", ex)
 
@@ -193,14 +197,17 @@ class SettingsView:
             if nuovo and self.engine is not None:
                 self.engine.memorizza_posizione()
             self._aggiorna_menu()
+            self.finestra.mostra_stato(f"Ricorda l'ultima posizione di ascolto {self._stato_maschile(nuovo)}.")
         except Exception as ex:
             scrivi_log("SettingsView.alterna_ricorda_posizione", ex)
 
     def alterna_ascolto_sottofondo(self):
         try:
-            if self._alterna(CHIAVE_ASCOLTO_SOTTOFONDO, False) is None:
+            nuovo = self._alterna(CHIAVE_ASCOLTO_SOTTOFONDO, False)
+            if nuovo is None:
                 return
             self._aggiorna_menu()
+            self.finestra.mostra_stato(f"Ascolto in sottofondo con Escape {self._stato_maschile(nuovo)}.")
         except Exception as ex:
             scrivi_log("SettingsView.alterna_ascolto_sottofondo", ex)
 
@@ -383,11 +390,14 @@ class SettingsView:
                 if not self.disattiva_avvio_automatico():
                     self.finestra.mostra_messaggio("Impossibile disattivare l'avvio automatico.", MESSAGGIO_DETTAGLI_LOG)
                     return
+                nuovo = False
             else:
                 if not self.attiva_avvio_automatico():
                     self.finestra.mostra_messaggio("Impossibile attivare l'avvio automatico.", MESSAGGIO_DETTAGLI_LOG)
                     return
+                nuovo = True
             self._aggiorna_menu()
+            self.finestra.mostra_stato(f"Avvio di {NOME_PROGRAMMA} all'accesso {self._stato_maschile(nuovo)}.")
         except Exception as ex:
             scrivi_log("SettingsView.alterna_avvio_automatico", ex)
 

@@ -6,6 +6,7 @@ from app.youtube.youtube_library import da_risultato
 from app.youtube.youtube_search import ErroreYouTube
 
 ERRORE_SERVIZIO = "Impossibile contattare YouTube. Riprovare più tardi."
+ERRORE_LOG = "I dettagli sono nel file di log."
 
 
 class YouTubeView:
@@ -14,6 +15,16 @@ class YouTubeView:
         self.engine = engine
         self.library = library
         self.search_client = search_client
+
+    def _operazione(self, testo_ok, testo_errore, funzione, *argomenti):
+        try:
+            if funzione(*argomenti):
+                self.finestra.mostra_stato(testo_ok)
+            else:
+                self.finestra.mostra_messaggio(testo_errore, ERRORE_LOG)
+        except Exception as ex:
+            scrivi_log(f"{self.__class__.__name__}._operazione ({testo_ok})", ex)
+            self.finestra.mostra_messaggio(testo_errore, ERRORE_LOG)
 
     def get_menu_items(self):
         try:
@@ -60,11 +71,35 @@ class YouTubeView:
             video = elenco[indice]
             azioni = [("Riproduci", partial(self.riproduci, elenco, indice), None)]
             if self.library.is_favorite(video.video_id):
-                azioni.append(("Rimuovi dai video preferiti", partial(self.library.remove_favorite, video.video_id), None))
+                azioni.append(
+                    (
+                        "Rimuovi dai video preferiti",
+                        partial(
+                            self._operazione,
+                            "Video rimosso dai preferiti.",
+                            "Impossibile rimuovere il video dai preferiti.",
+                            self.library.remove_favorite,
+                            video.video_id,
+                        ),
+                        None,
+                    )
+                )
             else:
                 azioni.append(("Aggiungi ai video preferiti", partial(self.aggiungi_preferito, video), None))
             if recenti:
-                azioni.append(("Rimuovi dai video recenti", partial(self.library.remove_recent, video.video_id), None))
+                azioni.append(
+                    (
+                        "Rimuovi dai video recenti",
+                        partial(
+                            self._operazione,
+                            "Video rimosso dai recenti.",
+                            "Impossibile rimuovere il video dai recenti.",
+                            self.library.remove_recent,
+                            video.video_id,
+                        ),
+                        None,
+                    )
+                )
                 azioni.append(("Svuota i video recenti", self.svuota_recenti, None))
             return azioni
         except Exception as ex:
@@ -109,7 +144,7 @@ class YouTubeView:
             if self.library.add_favorite(da_risultato(video)):
                 self.finestra.mostra_stato("Video aggiunto ai preferiti.")
             else:
-                self.finestra.mostra_messaggio("Impossibile aggiungere il video ai preferiti.")
+                self.finestra.mostra_messaggio("Impossibile aggiungere il video ai preferiti.", ERRORE_LOG)
         except Exception as ex:
             scrivi_log("YouTubeView.aggiungi_preferito", ex)
 
@@ -139,7 +174,7 @@ class YouTubeView:
         try:
             if isinstance(errore, ErroreYouTube):
                 return ERRORE_SERVIZIO
-            return ERRORE_SERVIZIO
+            return "Impossibile completare la ricerca su YouTube."
         except Exception as ex:
             scrivi_log("YouTubeView._messaggio_errore", ex)
             return ERRORE_SERVIZIO
@@ -160,7 +195,17 @@ class YouTubeView:
                         partial(self.esegui_ricerca, testo),
                         [
                             ("Cerca di nuovo", partial(self.esegui_ricerca, testo), None),
-                            ("Rimuovi dalle ricerche recenti", partial(self.library.remove_search, testo), None),
+                            (
+                                "Rimuovi dalle ricerche recenti",
+                                partial(
+                                    self._operazione,
+                                    "Ricerca rimossa dalle recenti.",
+                                    "Impossibile rimuovere la ricerca.",
+                                    self.library.remove_search,
+                                    testo,
+                                ),
+                                None,
+                            ),
                             ("Svuota le ricerche recenti", self.svuota_ricerche, None),
                         ],
                     )
@@ -172,7 +217,11 @@ class YouTubeView:
     def svuota_ricerche(self):
         try:
             if self.finestra.chiedi_conferma("Svuotare le ricerche recenti di YouTube?"):
-                self.library.clear_searches()
+                self._operazione(
+                    "Ricerche recenti svuotate.",
+                    "Impossibile svuotare le ricerche recenti.",
+                    self.library.clear_searches,
+                )
         except Exception as ex:
             scrivi_log("YouTubeView.svuota_ricerche", ex)
 
@@ -201,6 +250,10 @@ class YouTubeView:
     def svuota_recenti(self):
         try:
             if self.finestra.chiedi_conferma("Svuotare l'elenco dei video recenti?"):
-                self.library.clear_recent()
+                self._operazione(
+                    "Elenco dei video recenti svuotato.",
+                    "Impossibile svuotare l'elenco dei video recenti.",
+                    self.library.clear_recent,
+                )
         except Exception as ex:
             scrivi_log("YouTubeView.svuota_recenti", ex)

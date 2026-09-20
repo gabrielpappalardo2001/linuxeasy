@@ -9,6 +9,22 @@ from app.core import percorsi
 _logger = None
 _blocco = threading.Lock()
 _gestori_installati = False
+_contatori = threading.local()
+
+
+def errori_thread():
+    try:
+        return int(getattr(_contatori, "errori", 0))
+    except Exception as ex:
+        _scrivi_stderr(f"Errore nella lettura del contatore degli errori: {ex}")
+        return 0
+
+
+def _conta_errore():
+    try:
+        _contatori.errori = int(getattr(_contatori, "errori", 0)) + 1
+    except Exception as ex:
+        _scrivi_stderr(f"Errore nell'aggiornamento del contatore degli errori: {ex}")
 
 
 def _scrivi_stderr(testo):
@@ -51,8 +67,10 @@ def _formatta(tipo, valore, traccia):
         return f"Traccia non disponibile: {ex}"
 
 
-def scrivi_log(contesto, eccezione=None):
+def scrivi_log(contesto, eccezione=None, conta=True):
     try:
+        if conta:
+            _conta_errore()
         testo = str(contesto)
         if eccezione is not None:
             dettaglio = _formatta(type(eccezione), eccezione, eccezione.__traceback__)

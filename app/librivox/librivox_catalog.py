@@ -384,12 +384,16 @@ class LibriVoxCatalog:
         self._blocco = threading.Lock()
         self._thread = None
         self._fermo = threading.Event()
+        self._chiusura = False
+        self._attivo = False
         self._letti = 0
+        self._eventi = []
+        self._ascoltatore = None
 
     @property
     def aggiornamento_in_corso(self):
         try:
-            return self._thread is not None and self._thread.is_alive()
+            return self._attivo
         except Exception as ex:
             scrivi_log("LibriVoxCatalog.aggiornamento_in_corso", ex)
             return False
@@ -397,6 +401,37 @@ class LibriVoxCatalog:
     @property
     def libri_letti(self):
         return self._letti
+
+    def eventi(self):
+        try:
+            with self._blocco:
+                return list(self._eventi)
+        except Exception as ex:
+            scrivi_log("LibriVoxCatalog.eventi", ex)
+            return []
+
+    def imposta_ascoltatore(self, funzione):
+        try:
+            self._ascoltatore = funzione
+        except Exception as ex:
+            scrivi_log("LibriVoxCatalog.imposta_ascoltatore", ex)
+
+    def _annota(self, testo):
+        try:
+            with self._blocco:
+                self._eventi.append(str(testo))
+            if self._ascoltatore is not None:
+                GLib.idle_add(self._avvisa_ascoltatore)
+        except Exception as ex:
+            scrivi_log(f"LibriVoxCatalog._annota ({testo})", ex)
+
+    def _avvisa_ascoltatore(self):
+        try:
+            if self._ascoltatore is not None:
+                self._ascoltatore()
+        except Exception as ex:
+            scrivi_log("LibriVoxCatalog._avvisa_ascoltatore", ex)
+        return False
 
     def lingua_preferita(self):
         try:
@@ -439,10 +474,13 @@ class LibriVoxCatalog:
     def avvia_aggiornamento(self, al_termine=None):
         try:
             with self._blocco:
-                if self._thread is not None and self._thread.is_alive():
+                if self._attivo:
                     return False
                 self._fermo.clear()
+                self._chiusura = False
                 self._letti = 0
+                self._attivo = True
+                self._eventi = ["Avvio del download del catalogo di LibriVox."]
                 self._thread = threading.Thread(
                     target=self._esegui_aggiornamento,
                     args=(al_termine,),
@@ -452,27 +490,47 @@ class LibriVoxCatalog:
                 self._thread.start()
             return True
         except Exception as ex:
+            self._attivo = False
             scrivi_log("LibriVoxCatalog.avvia_aggiornamento", ex)
             return False
 
     def ferma(self):
         try:
+            self._chiusura = True
             self._fermo.set()
         except Exception as ex:
             scrivi_log("LibriVoxCatalog.ferma", ex)
 
+    def annulla_aggiornamento(self):
+        try:
+            if not self._attivo:
+                return False
+            self._fermo.set()
+            return True
+        except Exception as ex:
+            scrivi_log("LibriVoxCatalog.annulla_aggiornamento", ex)
+            return False
+
     def _esegui_aggiornamento(self, al_termine):
-        esito = {"libri": 0, "errore": ""}
+        esito = {"libri": 0, "errore": "", "annullato": False}
         try:
             libri = self.scarica_catalogo()
             if self._fermo.is_set():
-                return
-            esito["libri"] = self._salva_catalogo(libri)
+                esito["annullato"] = True
+                self._annota("Download del catalogo annullato. Il catalogo precedente è rimasto invariato.")
+            else:
+                self._annota(f"Download completato: {len(libri)} audiolibri ricevuti.")
+                self._annota("Salvataggio del catalogo nell'archivio del programma in corso.")
+                esito["libri"] = self._salva_catalogo(libri)
+                self._annota(f"Catalogo aggiornato: {esito['libri']} audiolibri disponibili.")
         except Exception as ex:
             scrivi_log("LibriVoxCatalog._esegui_aggiornamento", ex)
-            esito["errore"] = str(ex)
+            esito["errore"] = str(ex) or "errore sconosciuto"
+            self._annota("Download del catalogo non riuscito. Controllare la connessione e riprovare.")
+        finally:
+            self._attivo = False
         try:
-            if al_termine is not None and not self._fermo.is_set():
+            if al_termine is not None and not self._chiusura:
                 GLib.idle_add(self._consegna, al_termine, esito)
         except Exception as ex:
             scrivi_log("LibriVoxCatalog._esegui_aggiornamento consegna", ex)
@@ -498,6 +556,10 @@ class LibriVoxCatalog:
             except Exception as ex:
                 ultimo_errore = ex
                 scrivi_log(f"LibriVoxCatalog._pagina tentativo {tentativo + 1} (offset {offset})", ex)
+                if tentativo + 1 < TENTATIVI:
+                    self._annota(
+                        f"Connessione non riuscita, nuovo tentativo tra {PAUSA_TENTATIVO * (tentativo + 1)} secondi."
+                    )
                 if self._fermo.wait(PAUSA_TENTATIVO * (tentativo + 1)):
                     return []
         raise ErroreLibriVox(f"Pagina del catalogo non scaricata: {ultimo_errore}")
@@ -519,6 +581,8 @@ class LibriVoxCatalog:
                         if identificativo > 0:
                             libri[identificativo] = elemento
                 self._letti = len(libri)
+                if pagina:
+                    self._annota(f"Pagina {numero + 1} ricevuta: {len(libri)} audiolibri letti finora.")
                 if len(pagina) < PAGINA_CATALOGO:
                     break
             if not libri and not self._fermo.is_set():

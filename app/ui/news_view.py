@@ -13,6 +13,7 @@ from app.ui.pagina import PaginaTesto
 ETA_MASSIMA_SECONDI = 600
 TITOLO_MENU = "Menu Notizie"
 TITOLO_SEGNALATE = "Nuove notizie segnalate"
+ERRORE_LOG = "I dettagli sono nel file di log."
 
 
 class FonteGiaPresente(Exception):
@@ -37,6 +38,44 @@ class NewsView:
         self.extractor = extractor
         self.updater = updater
 
+    def _operazione(self, testo_ok, testo_errore, funzione, *argomenti):
+        try:
+            if funzione(*argomenti):
+                self.finestra.mostra_stato(testo_ok)
+            else:
+                self.finestra.mostra_messaggio(testo_errore, ERRORE_LOG)
+        except Exception as ex:
+            scrivi_log(f"NewsView._operazione ({testo_ok})", ex)
+            self.finestra.mostra_messaggio(testo_errore, ERRORE_LOG)
+
+    def _segna_letto(self, article_id, letto):
+        return partial(
+            self._operazione,
+            "Articolo segnato come letto." if letto else "Articolo segnato come non letto.",
+            "Impossibile aggiornare lo stato dell'articolo.",
+            self.manager.mark_read,
+            article_id,
+            letto,
+        )
+
+    def _segna_tutte(self, *argomenti):
+        return partial(
+            self._operazione,
+            "Notizie segnate come lette.",
+            "Impossibile segnare le notizie come lette.",
+            self.manager.mark_all_read,
+            *argomenti,
+        )
+
+    def _rimuovi_salvato(self, chiave):
+        return partial(
+            self._operazione,
+            "Articolo rimosso dagli articoli salvati.",
+            "Impossibile rimuovere l'articolo dagli articoli salvati.",
+            self.manager.remove_saved,
+            chiave,
+        )
+
     def get_menu_items(self):
         try:
             non_letti = self.manager.count_unread()
@@ -50,13 +89,13 @@ class NewsView:
                 (f"Fonti, {fonti}", self.apri_fonti, None),
                 ("Cerca nelle notizie", self.cerca, None),
                 (f"Articoli salvati, {salvati}", self.apri_salvati, None),
-                ("Aggiungi fonte", self.aggiungi_fonte, None),
+                ("Nuova fonte", self.aggiungi_fonte, None),
                 ("Gestione categorie", self.apri_gestione_categorie, None),
                 ("Aggiorna tutte le notizie", self.aggiorna_tutte, None),
             ]
         except Exception as ex:
             scrivi_log("NewsView.get_menu_items", ex)
-            return [("Aggiungi fonte", self.aggiungi_fonte, None)]
+            return [("Nuova fonte", self.aggiungi_fonte, None)]
 
     def _voci_articoli(self, articoli, mostra_fonte=True, segna_tutte=None):
         voci = []
@@ -80,11 +119,11 @@ class NewsView:
                 return []
             azioni = [("Leggi", partial(self.leggi_articolo, article_id), None)]
             if articolo.is_read:
-                azioni.append(("Segna come non letto", partial(self.manager.mark_read, article_id, False), None))
+                azioni.append(("Segna come non letto", self._segna_letto(article_id, False), None))
             else:
-                azioni.append(("Segna come letto", partial(self.manager.mark_read, article_id, True), None))
+                azioni.append(("Segna come letto", self._segna_letto(article_id, True), None))
             if self.manager.is_saved(articolo):
-                azioni.append(("Rimuovi dagli articoli salvati", partial(self.manager.remove_saved, articolo.chiave()), None))
+                azioni.append(("Rimuovi dagli articoli salvati", self._rimuovi_salvato(articolo.chiave()), None))
             else:
                 azioni.append(("Salva l'articolo", partial(self.salva_articolo, article_id, None), None))
             if articolo.link:
@@ -113,20 +152,41 @@ class NewsView:
                 self.finestra.mostra_messaggio("L'articolo non è più disponibile.")
                 return
             if not self.manager.save_article(articolo, testo or articolo.full_text):
-                self.finestra.mostra_messaggio("Impossibile salvare l'articolo.", "I dettagli sono nel file di log.")
+                self.finestra.mostra_messaggio("Impossibile salvare l'articolo.", ERRORE_LOG)
                 return
             if not testo and not articolo.full_text:
+                self.finestra.mostra_stato("Articolo salvato. Scaricamento del testo completo in corso.")
                 threading.Thread(target=self._completa_salvataggio, args=(articolo,), name="SalvaArticolo", daemon=True).start()
+            else:
+                self.finestra.mostra_stato("Articolo salvato.")
         except Exception as ex:
             scrivi_log(f"NewsView.salva_articolo ({article_id})", ex)
 
     def _completa_salvataggio(self, articolo):
+        riuscito = False
         try:
             esito = self.extractor.estrai(articolo)
             if esito and esito.get("testo"):
-                self.manager.save_article(articolo, esito["testo"])
+                riuscito = bool(self.manager.save_article(articolo, esito["testo"]))
         except Exception as ex:
             scrivi_log(f"NewsView._completa_salvataggio ({articolo.link})", ex)
+        try:
+            GLib.idle_add(self._salvataggio_completato, articolo.title, riuscito)
+        except Exception as ex:
+            scrivi_log("NewsView._completa_salvataggio consegna", ex)
+
+    def _salvataggio_completato(self, titolo, riuscito):
+        try:
+            if riuscito:
+                self.finestra.mostra_stato(f"Testo completo salvato: {titolo}.")
+            else:
+                self.finestra.mostra_messaggio(
+                    f"Impossibile scaricare il testo completo di {titolo}.",
+                    "L'articolo è stato salvato senza il testo completo.",
+                )
+        except Exception as ex:
+            scrivi_log("NewsView._salvataggio_completato", ex)
+        return False
 
     def _pagina_articolo(self, articolo, testo, metodo, azioni):
         try:
@@ -189,14 +249,14 @@ class NewsView:
                 return []
             azioni = []
             if self.manager.is_saved(articolo):
-                azioni.append(("Rimuovi dagli articoli salvati", partial(self.manager.remove_saved, articolo.chiave()), None))
+                azioni.append(("Rimuovi dagli articoli salvati", self._rimuovi_salvato(articolo.chiave()), None))
             else:
                 azioni.append(("Salva l'articolo", partial(self.salva_articolo, article_id, testo), None))
             if articolo.link:
                 azioni.append(("Apri nel browser", partial(self.finestra.apri_nel_browser, articolo.link), None))
                 azioni.append(("Copia il link", partial(self.copia_link, articolo.link), None))
                 azioni.append(("Recupera il testo con il browser invisibile", partial(self.recupera_con_browser, article_id), None))
-            azioni.append(("Segna come non letto", partial(self.manager.mark_read, article_id, False), None))
+            azioni.append(("Segna come non letto", self._segna_letto(article_id, False), None))
             return azioni
         except Exception as ex:
             scrivi_log(f"NewsView._azioni_pagina_articolo ({article_id})", ex)
@@ -266,7 +326,7 @@ class NewsView:
         try:
             self._apri_articoli(
                 "Ultime notizie",
-                lambda: self._voci_articoli(self.manager.get_articles(), True, self.manager.mark_all_read),
+                lambda: self._voci_articoli(self.manager.get_articles(), True, self._segna_tutte()),
                 self.manager.get_sources(),
                 partial(self.manager.update_all, ETA_MASSIMA_SECONDI),
                 "Nessuna notizia disponibile.",
@@ -284,7 +344,7 @@ class NewsView:
                 lambda: self._voci_articoli(
                     self.manager.get_articles(category_id=category_id),
                     True,
-                    partial(self.manager.mark_all_read, None, category_id),
+                    self._segna_tutte(None, category_id),
                 ),
                 self.manager.get_sources(category_id),
                 partial(self.manager.update_all, ETA_MASSIMA_SECONDI, category_id),
@@ -302,7 +362,7 @@ class NewsView:
             sorgente = lambda: self._voci_articoli(
                 self.manager.get_articles(source_url=url),
                 False,
-                partial(self.manager.mark_all_read, url),
+                self._segna_tutte(url),
             )
             if self.manager.needs_update(fonte, ETA_MASSIMA_SECONDI):
                 self.finestra.carica_in_background(
@@ -331,7 +391,7 @@ class NewsView:
                 lambda: self._voci_articoli(
                     self.manager.get_notified_unread(),
                     True,
-                    partial(self.manager.mark_all_read, None, None, True),
+                    self._segna_tutte(None, None, True),
                 ),
                 "Nessuna nuova notizia segnalata.",
             )
@@ -374,7 +434,7 @@ class NewsView:
             return [
                 ("Apri", partial(self.apri_fonte, url), None),
                 ("Aggiorna ora", partial(self.aggiorna_fonte, url), None),
-                ("Segna tutte come lette", partial(self.manager.mark_all_read, url), None),
+                ("Segna tutte come lette", self._segna_tutte(url), None),
                 ("Rinomina", partial(self.rinomina_fonte, url), None),
                 ("Sposta in un'altra categoria", partial(self.sposta_fonte, url), None),
                 ("Elimina la fonte", partial(self.elimina_fonte, url), None),
@@ -434,8 +494,14 @@ class NewsView:
             if fonte is None:
                 return
             nome = self.finestra.chiedi_testo("Rinomina la fonte", "Nuovo nome della fonte", fonte["name"])
-            if nome and nome != fonte["name"] and not self.manager.rename_source(url, nome):
-                self.finestra.mostra_messaggio("Impossibile rinominare la fonte.")
+            if nome and nome != fonte["name"]:
+                self._operazione(
+                    f"Fonte rinominata in {nome}.",
+                    "Impossibile rinominare la fonte.",
+                    self.manager.rename_source,
+                    url,
+                    nome,
+                )
         except Exception as ex:
             scrivi_log(f"NewsView.rinomina_fonte ({url})", ex)
 
@@ -473,8 +539,12 @@ class NewsView:
             if fonte is None:
                 return
             if self.finestra.chiedi_conferma(f"Eliminare la fonte {fonte['name']} e le sue notizie scaricate?"):
-                if not self.manager.remove_source(fonte):
-                    self.finestra.mostra_messaggio("Impossibile eliminare la fonte.")
+                self._operazione(
+                    f"Fonte {fonte['name']} eliminata.",
+                    "Impossibile eliminare la fonte.",
+                    self.manager.remove_source,
+                    fonte,
+                )
         except Exception as ex:
             scrivi_log(f"NewsView.elimina_fonte ({url})", ex)
 
@@ -543,11 +613,18 @@ class NewsView:
                 ("Apri", partial(self.apri_categoria, category_id), None),
                 (
                     "Disattiva gli avvisi" if categoria["notify"] else "Attiva gli avvisi",
-                    partial(self.manager.set_category_notify, category_id, not categoria["notify"]),
+                    partial(
+                        self._operazione,
+                        "Avvisi disattivati." if categoria["notify"] else "Avvisi attivati.",
+                        "Impossibile modificare gli avvisi della categoria.",
+                        self.manager.set_category_notify,
+                        category_id,
+                        not categoria["notify"],
+                    ),
                     None,
                 ),
                 ("Rinomina", partial(self.rinomina_categoria, category_id), None),
-                ("Segna tutte come lette", partial(self.manager.mark_all_read, None, category_id), None),
+                ("Segna tutte come lette", self._segna_tutte(None, category_id), None),
                 ("Elimina la categoria", partial(self.elimina_categoria, category_id), None),
             ]
         except Exception as ex:
@@ -562,7 +639,7 @@ class NewsView:
 
     def _voci_gestione_categorie(self):
         try:
-            voci = [("Aggiungi categoria", self.aggiungi_categoria, None)]
+            voci = [("Nuova categoria", self.aggiungi_categoria, None)]
             for categoria in self.manager.get_categories():
                 voci.append(
                     (
@@ -574,20 +651,21 @@ class NewsView:
             return voci
         except Exception as ex:
             scrivi_log("NewsView._voci_gestione_categorie", ex)
-            return [("Aggiungi categoria", self.aggiungi_categoria, None)]
+            return [("Nuova categoria", self.aggiungi_categoria, None)]
 
     def aggiungi_categoria(self):
         try:
-            nome = self.finestra.chiedi_testo("Aggiungi categoria", "Nome della nuova categoria")
+            nome = self.finestra.chiedi_testo("Nuova categoria", "Nome della nuova categoria")
             if not nome:
                 return
             esito = self.manager.add_category(nome)
             if esito == gestore.ESITO_DUPLICATO:
                 self.finestra.mostra_messaggio("Esiste già una categoria con questo nome.")
             elif esito != gestore.ESITO_OK:
-                self.finestra.mostra_messaggio("Impossibile aggiungere la categoria.")
+                self.finestra.mostra_messaggio("Impossibile aggiungere la categoria.", ERRORE_LOG)
             else:
                 self.finestra.ricarica_menu_corrente()
+                self.finestra.mostra_stato(f"Categoria {nome} aggiunta.")
         except Exception as ex:
             scrivi_log("NewsView.aggiungi_categoria", ex)
 
@@ -603,7 +681,9 @@ class NewsView:
             if esito == gestore.ESITO_DUPLICATO:
                 self.finestra.mostra_messaggio("Esiste già una categoria con questo nome.")
             elif esito != gestore.ESITO_OK:
-                self.finestra.mostra_messaggio("Impossibile rinominare la categoria.")
+                self.finestra.mostra_messaggio("Impossibile rinominare la categoria.", ERRORE_LOG)
+            else:
+                self.finestra.mostra_stato(f"Categoria rinominata in {nome}.")
         except Exception as ex:
             scrivi_log(f"NewsView.rinomina_categoria ({category_id})", ex)
 
@@ -621,7 +701,9 @@ class NewsView:
             if not self.finestra.chiedi_conferma(f"Eliminare la categoria {categoria['name']}?"):
                 return
             if self.manager.delete_category(category_id) != gestore.ESITO_OK:
-                self.finestra.mostra_messaggio("Impossibile eliminare la categoria.")
+                self.finestra.mostra_messaggio("Impossibile eliminare la categoria.", ERRORE_LOG)
+            else:
+                self.finestra.mostra_stato(f"Categoria {categoria['name']} eliminata.")
         except Exception as ex:
             scrivi_log(f"NewsView.elimina_categoria ({category_id})", ex)
 
@@ -688,7 +770,7 @@ class NewsView:
             azioni = []
             if con_lettura:
                 azioni.append(("Leggi", partial(self.leggi_salvato, key), None))
-            azioni.append(("Rimuovi dagli articoli salvati", partial(self.manager.remove_saved, key), None))
+            azioni.append(("Rimuovi dagli articoli salvati", self._rimuovi_salvato(key), None))
             if articolo.link:
                 azioni.append(("Apri nel browser", partial(self.finestra.apri_nel_browser, articolo.link), None))
                 azioni.append(("Copia il link", partial(self.copia_link, articolo.link), None))
@@ -712,7 +794,7 @@ class NewsView:
 
     def aggiungi_fonte(self):
         try:
-            indirizzo = self.finestra.chiedi_testo("Aggiungi fonte", "Indirizzo del sito o del feed")
+            indirizzo = self.finestra.chiedi_testo("Nuova fonte", "Indirizzo del sito o del feed")
             if not indirizzo:
                 return
             if not self.manager.get_categories():
@@ -767,12 +849,15 @@ class NewsView:
             if esito == gestore.ESITO_OK:
                 self.finestra.go_back()
                 threading.Thread(
-                    target=self.manager.update_source,
-                    args=(rilevata["feed_url"],),
+                    target=self._prima_lettura,
+                    args=(rilevata["feed_url"], nome),
                     name="PrimaLetturaFonte",
                     daemon=True,
                 ).start()
-                self.finestra.mostra_messaggio(f"Fonte {nome} aggiunta alla categoria {nome_categoria}.")
+                self.finestra.mostra_messaggio(
+                    f"Fonte {nome} aggiunta alla categoria {nome_categoria}.",
+                    "Le notizie vengono scaricate in questo momento.",
+                )
             elif esito == gestore.ESITO_DUPLICATO:
                 self.finestra.go_back()
                 self.finestra.mostra_messaggio("La fonte è già presente.")
@@ -780,6 +865,32 @@ class NewsView:
                 self.finestra.mostra_messaggio("Impossibile aggiungere la fonte.", "I dettagli sono nel file di log.")
         except Exception as ex:
             scrivi_log("NewsView._conferma_nuova_fonte", ex)
+
+    def _prima_lettura(self, url, nome):
+        esito = None
+        try:
+            esito = self.manager.update_source(url)
+        except Exception as ex:
+            scrivi_log(f"NewsView._prima_lettura ({url})", ex)
+        try:
+            GLib.idle_add(self._prima_lettura_conclusa, nome, esito)
+        except Exception as ex:
+            scrivi_log("NewsView._prima_lettura consegna", ex)
+
+    def _prima_lettura_conclusa(self, nome, esito):
+        try:
+            if esito is None or esito.get("errore"):
+                self.finestra.mostra_messaggio(
+                    f"Impossibile scaricare le notizie di {nome}.",
+                    "La fonte è stata aggiunta. Riprovare più tardi da Aggiorna ora.",
+                )
+            else:
+                self.finestra.mostra_stato(f"{nome}: {conta(esito.get('nuovi', 0), 'articolo scaricato', 'articoli scaricati')}.")
+                if self.finestra.titolo_corrente() == TITOLO_MENU:
+                    self.finestra.ricarica_menu_corrente(annuncia_vuoto=False)
+        except Exception as ex:
+            scrivi_log("NewsView._prima_lettura_conclusa", ex)
+        return False
 
     def aggiorna_tutte(self):
         try:
@@ -794,7 +905,7 @@ class NewsView:
     def _aggiornamento_concluso(self, resoconto):
         try:
             if not resoconto:
-                self.finestra.mostra_messaggio("Impossibile aggiornare le notizie.")
+                self.finestra.mostra_messaggio("Impossibile aggiornare le notizie.", ERRORE_LOG)
                 return
             if self.finestra.titolo_corrente() == TITOLO_MENU:
                 self.finestra.ricarica_menu_corrente(annuncia_vuoto=False)

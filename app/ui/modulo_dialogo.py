@@ -8,6 +8,7 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Atk, Gdk, Gtk
 
 from app.core.log import scrivi_log
+from app.ui.messaggi import mostra_avviso
 
 TIPO_TESTO = "testo"
 TIPO_MULTIRIGA = "multiriga"
@@ -16,11 +17,19 @@ TIPO_SCELTA = "scelta"
 NOME_PROGRAMMA = "LinuxEasy"
 LARGHEZZA = 560
 ALTEZZA_MASSIMA = 560
-ISTRUZIONI = "Frecce su e giù o Invio per cambiare campo, Ctrl+Invio per salvare, Escape per annullare."
+ISTRUZIONI_MODULO = (
+    "Invio passa al campo seguente e nell'ultimo campo salva tutto. "
+    "Maiusc+Invio torna al campo precedente. "
+    "Le frecce su e giù cambiano campo, tranne nelle caselle a scelta dove cambiano il valore. "
+    "Escape annulla."
+)
+ISTRUZIONI_CAMPO_SINGOLO = "Invio conferma, Escape annulla."
 TASTI_INVIO = ("Return", "KP_Enter", "ISO_Enter")
 TASTI_SU = ("Up", "KP_Up")
 TASTI_GIU = ("Down", "KP_Down")
 TASTI_LATERALI = ("Left", "Right", "KP_Left", "KP_Right")
+RISPOSTA_SALVA = Gtk.ResponseType.OK
+RISPOSTA_ANNULLA = Gtk.ResponseType.CANCEL
 
 
 @dataclass
@@ -35,12 +44,11 @@ class Campo:
 
 
 class ModuloDialogo:
-    def __init__(self, finestra, titolo, campi, convalida=None, testo_conferma="Salva"):
+    def __init__(self, finestra, titolo, campi, convalida=None):
         self.finestra = finestra
         self.titolo = titolo
         self.campi = list(campi)
         self.convalida = convalida
-        self.testo_conferma = testo_conferma
         self._widget = {}
         self._etichette = {}
         self._dialogo = None
@@ -131,17 +139,24 @@ class ModuloDialogo:
             return vista, contenitore
         widget = Gtk.Entry()
         widget.set_text(str(campo.valore or ""))
-        widget.set_activates_default(True)
         if campo.suggerimento:
             widget.set_placeholder_text(campo.suggerimento)
         widget.connect("changed", self._aggiorna_dipendenze)
         return widget, widget
 
+    def _testo_istruzioni(self):
+        try:
+            return ISTRUZIONI_CAMPO_SINGOLO if len(self.campi) == 1 else ISTRUZIONI_MODULO
+        except Exception as ex:
+            scrivi_log("ModuloDialogo._testo_istruzioni", ex)
+            return ISTRUZIONI_MODULO
+
     def _costruisci(self):
         dialogo = Gtk.Dialog(title=f"{self.titolo} - {NOME_PROGRAMMA}", transient_for=self.finestra, modal=True)
-        dialogo.add_button(self.testo_conferma, Gtk.ResponseType.OK)
-        dialogo.add_button("Annulla", Gtk.ResponseType.CANCEL)
-        dialogo.set_default_response(Gtk.ResponseType.OK)
+        area_pulsanti = dialogo.get_action_area()
+        if area_pulsanti is not None:
+            area_pulsanti.set_no_show_all(True)
+            area_pulsanti.hide()
         dialogo.set_default_size(LARGHEZZA, -1)
         griglia = Gtk.Grid(column_spacing=12, row_spacing=8)
         griglia.set_border_width(12)
@@ -166,7 +181,7 @@ class ModuloDialogo:
         scorrimento.set_max_content_height(ALTEZZA_MASSIMA)
         scorrimento.add(griglia)
         griglia.set_focus_vadjustment(scorrimento.get_vadjustment())
-        istruzioni = Gtk.Label(label=ISTRUZIONI)
+        istruzioni = Gtk.Label(label=self._testo_istruzioni())
         istruzioni.set_xalign(0)
         istruzioni.set_line_wrap(True)
         istruzioni.set_margin_start(12)
@@ -174,9 +189,6 @@ class ModuloDialogo:
         istruzioni.set_margin_top(8)
         dialogo.get_content_area().pack_start(istruzioni, False, False, 0)
         dialogo.get_content_area().pack_start(scorrimento, True, True, 0)
-        accessibile = dialogo.get_accessible()
-        if accessibile is not None:
-            accessibile.set_description(ISTRUZIONI)
         dialogo.connect("key-press-event", self._tasto)
         self._dialogo = dialogo
         self._aggiorna_dipendenze()
@@ -189,11 +201,6 @@ class ModuloDialogo:
                 widget = self._widget.get(campo.chiave)
                 if widget is not None and widget.get_sensitive() and widget.get_visible():
                     elenco.append(widget)
-            if self._dialogo is not None:
-                for risposta in (Gtk.ResponseType.OK, Gtk.ResponseType.CANCEL):
-                    pulsante = self._dialogo.get_widget_for_response(risposta)
-                    if pulsante is not None:
-                        elenco.append(pulsante)
         except Exception as ex:
             scrivi_log("ModuloDialogo._ordine_fuoco", ex)
         return elenco
@@ -223,18 +230,35 @@ class ModuloDialogo:
             scrivi_log(f"ModuloDialogo._sposta_fuoco ({passo})", ex)
             return False
 
+    def _avanza_o_salva(self, elenco, posizione):
+        try:
+            if posizione < 0:
+                return self._sposta_fuoco(1)
+            if posizione >= len(elenco) - 1:
+                self._dialogo.response(RISPOSTA_SALVA)
+                return True
+            return self._sposta_fuoco(1)
+        except Exception as ex:
+            scrivi_log("ModuloDialogo._avanza_o_salva", ex)
+            return False
+
     def _cambia_scelta(self, combo, passo):
         try:
             modello = combo.get_model()
             totale = len(modello) if modello is not None else 0
             if totale == 0:
-                return False
+                return True
             attuale = combo.get_active()
-            combo.set_active((attuale + passo) % totale if attuale >= 0 else 0)
+            if attuale < 0:
+                combo.set_active(0)
+                return True
+            destinazione = attuale + passo
+            if 0 <= destinazione < totale:
+                combo.set_active(destinazione)
             return True
         except Exception as ex:
             scrivi_log("ModuloDialogo._cambia_scelta", ex)
-            return False
+            return True
 
     def _testo_al_bordo(self, vista, verso_basso):
         try:
@@ -257,7 +281,7 @@ class ModuloDialogo:
             maiuscolo = bool(stato & Gdk.ModifierType.SHIFT_MASK)
             alternativo = bool(stato & Gdk.ModifierType.MOD1_MASK)
             if nome == "Escape":
-                dialogo.response(Gtk.ResponseType.CANCEL)
+                dialogo.response(RISPOSTA_ANNULLA)
                 return True
             fuoco = dialogo.get_focus()
             elenco = self._ordine_fuoco()
@@ -265,15 +289,17 @@ class ModuloDialogo:
             widget = elenco[posizione] if posizione >= 0 else None
             if nome in TASTI_INVIO:
                 if controllo:
-                    dialogo.response(Gtk.ResponseType.OK)
+                    dialogo.response(RISPOSTA_SALVA)
                     return True
-                if isinstance(widget, Gtk.Button) and not isinstance(widget, Gtk.CheckButton):
-                    return False
                 if isinstance(widget, Gtk.TextView) and maiuscolo:
                     return False
-                return self._sposta_fuoco(1)
+                if maiuscolo:
+                    return self._sposta_fuoco(-1)
+                return self._avanza_o_salva(elenco, posizione)
             if alternativo or controllo:
                 return False
+            if isinstance(widget, Gtk.ComboBox) and (nome in TASTI_SU or nome in TASTI_GIU):
+                return self._cambia_scelta(widget, -1 if nome in TASTI_SU else 1)
             if nome in TASTI_SU or nome in TASTI_GIU:
                 verso_basso = nome in TASTI_GIU
                 if isinstance(widget, Gtk.TextView) and not self._testo_al_bordo(widget, verso_basso):
@@ -308,7 +334,7 @@ class ModuloDialogo:
             self._metti_a_fuoco(campo_iniziale or (self.campi[0].chiave if self.campi else None))
             while True:
                 risposta = dialogo.run()
-                if risposta != Gtk.ResponseType.OK:
+                if risposta != RISPOSTA_SALVA:
                     return None
                 valori = self.valori()
                 if self.convalida is None:
@@ -321,7 +347,7 @@ class ModuloDialogo:
                 if not errore:
                     return valori
                 messaggio, chiave = errore
-                self._avviso(dialogo, messaggio)
+                mostra_avviso(dialogo, messaggio)
                 self._metti_a_fuoco(chiave)
         except Exception as ex:
             scrivi_log(f"ModuloDialogo.esegui ({self.titolo})", ex)
@@ -333,42 +359,23 @@ class ModuloDialogo:
             except Exception as ex:
                 scrivi_log("ModuloDialogo.esegui distruzione", ex)
 
-    def _avviso(self, genitore, testo):
-        avviso = None
-        try:
-            avviso = Gtk.MessageDialog(
-                transient_for=genitore,
-                modal=True,
-                message_type=Gtk.MessageType.WARNING,
-                buttons=Gtk.ButtonsType.CLOSE,
-                text=testo,
-            )
-            avviso.set_title(NOME_PROGRAMMA)
-            avviso.connect("key-press-event", self._tasto_avviso)
-            avviso.run()
-        except Exception as ex:
-            scrivi_log(f"ModuloDialogo._avviso ({testo})", ex)
-        finally:
-            try:
-                if avviso is not None:
-                    avviso.destroy()
-            except Exception as ex:
-                scrivi_log("ModuloDialogo._avviso distruzione", ex)
 
-    def _tasto_avviso(self, avviso, evento):
-        try:
-            if Gdk.keyval_name(evento.keyval) == "Escape":
-                avviso.response(Gtk.ResponseType.CLOSE)
-                return True
-            return False
-        except Exception as ex:
-            scrivi_log("ModuloDialogo._tasto_avviso", ex)
-            return False
-
-
-def chiedi_modulo(finestra, titolo, campi, convalida=None, testo_conferma="Salva", campo_iniziale=None):
+def chiedi_modulo(finestra, titolo, campi, convalida=None, campo_iniziale=None):
     try:
-        return ModuloDialogo(finestra, titolo, campi, convalida, testo_conferma).esegui(campo_iniziale)
+        return ModuloDialogo(finestra, titolo, campi, convalida).esegui(campo_iniziale)
     except Exception as ex:
         scrivi_log(f"modulo_dialogo.chiedi_modulo ({titolo})", ex)
+        return None
+
+
+def chiedi_testo(finestra, titolo, domanda, testo_iniziale=""):
+    try:
+        campo = Campo("testo", domanda, valore=testo_iniziale or "")
+        valori = ModuloDialogo(finestra, titolo, [campo]).esegui("testo")
+        if valori is None:
+            return None
+        testo = " ".join(str(valori.get("testo", "")).split())
+        return testo or None
+    except Exception as ex:
+        scrivi_log(f"modulo_dialogo.chiedi_testo ({titolo})", ex)
         return None

@@ -15,7 +15,7 @@ from app.librivox.librivox_catalog import (
     in_lingua,
     nome_lingua,
 )
-from app.ui.pagina import PaginaTesto
+from app.ui.pagina import PaginaProgresso, PaginaTesto
 
 TITOLO_MENU = "Menu LibriVox"
 TITOLO_LINGUE = "Elenco per lingua"
@@ -24,6 +24,7 @@ TITOLO_SCARICATI = "Audiolibri scaricati"
 TITOLO_DOWNLOAD = "Download degli audiolibri"
 TITOLO_PREFERITI = "Audiolibri preferiti"
 TITOLO_RECENTI = "Audiolibri recenti"
+TITOLO_AVANZAMENTO_CATALOGO = "Download del catalogo di LibriVox"
 TIPO_ASCOLTO = "audiolibro"
 SOGLIA_ELENCO = 300
 ERRORE_RETE = "Impossibile contattare LibriVox. Riprovare più tardi."
@@ -50,6 +51,11 @@ class LibriVoxView:
         self.libreria = libreria
         self.downloads = downloads
         self._ascolto = None
+        self._pagina_catalogo = None
+        try:
+            self.catalogo.imposta_ascoltatore(self._eventi_catalogo)
+        except Exception as ex:
+            scrivi_log("LibriVoxView.__init__ ascoltatore", ex)
 
     def get_menu_items(self):
         try:
@@ -69,19 +75,45 @@ class LibriVoxView:
                 [
                     (TITOLO_PREFERITI, self.apri_preferiti, None),
                     (TITOLO_RECENTI, self.apri_recenti, None),
-                    (f"Lingua preferita: {nome_lingua(lingua)}", self.apri_scelta_lingua, None),
-                    (self._etichetta_catalogo(), self.aggiorna_catalogo, None),
+                    (f"Cambia la lingua, attuale: {nome_lingua(lingua)}", self.apri_scelta_lingua, None),
+                    (self._etichetta_catalogo(), self.aggiorna_catalogo, self._azioni_catalogo),
                 ]
             )
             return voci
         except Exception as ex:
             scrivi_log("LibriVoxView.get_menu_items", ex)
-            return [(self._etichetta_catalogo(), self.aggiorna_catalogo, None)]
+            return [(self._etichetta_catalogo(), self.aggiorna_catalogo, self._azioni_catalogo)]
+
+    def _azioni_catalogo(self):
+        try:
+            if self.catalogo.aggiornamento_in_corso:
+                return [
+                    ("Segui l'avanzamento del download", self.apri_avanzamento_catalogo, None),
+                    ("Annulla il download del catalogo", self.annulla_catalogo, None),
+                ]
+            if self.catalogo.eventi():
+                return [
+                    ("Rileggi il resoconto dell'ultimo download", self.apri_avanzamento_catalogo, None),
+                    ("Scarica di nuovo il catalogo", self.aggiorna_catalogo, None),
+                ]
+            return [("Scarica il catalogo", self.aggiorna_catalogo, None)]
+        except Exception as ex:
+            scrivi_log("LibriVoxView._azioni_catalogo", ex)
+            return []
+
+    def _azioni_avanzamento(self):
+        try:
+            if self.catalogo.aggiornamento_in_corso:
+                return [("Annulla il download del catalogo", self.annulla_catalogo, None)]
+            return [("Scarica di nuovo il catalogo", self.aggiorna_catalogo, None)]
+        except Exception as ex:
+            scrivi_log("LibriVoxView._azioni_avanzamento", ex)
+            return []
 
     def _etichetta_catalogo(self):
         try:
             if self.catalogo.aggiornamento_in_corso:
-                return f"Download del catalogo in corso, {conta(self.catalogo.libri_letti, 'audiolibro letto', 'audiolibri letti')}"
+                return "Download del catalogo in corso, aprire per seguire l'avanzamento"
             totale = self.catalogo.numero_libri()
             if totale == 0:
                 return "Scarica il catalogo di LibriVox"
@@ -111,7 +143,8 @@ class LibriVoxView:
             if self.catalogo.aggiornamento_in_corso:
                 self.finestra.mostra_messaggio(
                     "Il catalogo di LibriVox è in corso di download.",
-                    f"Finora sono stati letti {self.catalogo.libri_letti} audiolibri. Al termine compare un avviso.",
+                    f"Finora sono stati letti {self.catalogo.libri_letti} audiolibri. "
+                    "Al termine compare un avviso. Per seguire l'avanzamento aprire il Centro di controllo.",
                 )
                 return False
             self.proponi_catalogo()
@@ -123,30 +156,98 @@ class LibriVoxView:
     def aggiorna_catalogo(self):
         try:
             if self.catalogo.aggiornamento_in_corso:
-                self.finestra.mostra_stato(
-                    f"Download del catalogo in corso: {conta(self.catalogo.libri_letti, 'audiolibro letto', 'audiolibri letti')}."
-                )
+                self.apri_avanzamento_catalogo()
                 return
+            self._pagina_catalogo = None
             if not self.catalogo.avvia_aggiornamento(self._catalogo_aggiornato):
                 self.finestra.mostra_messaggio("Impossibile avviare il download del catalogo.", ERRORE_LOG)
                 return
             self._ricarica_se(TITOLO_MENU)
             self.finestra.mostra_stato("Download del catalogo di LibriVox avviato.")
+            self.apri_avanzamento_catalogo()
         except Exception as ex:
             scrivi_log("LibriVoxView.aggiorna_catalogo", ex)
+
+    def _pagina_avanzamento(self):
+        try:
+            if self._pagina_catalogo is None:
+                self._pagina_catalogo = PaginaProgresso(
+                    TITOLO_AVANZAMENTO_CATALOGO,
+                    self.catalogo.eventi(),
+                    self._azioni_avanzamento,
+                )
+            return self._pagina_catalogo
+        except Exception as ex:
+            scrivi_log("LibriVoxView._pagina_avanzamento", ex)
+            return None
+
+    def _sincronizza_pagina(self, pagina):
+        try:
+            eventi = self.catalogo.eventi()
+            for riga in eventi[len(pagina.righe):]:
+                self.finestra.aggiungi_riga_pagina(pagina, riga)
+        except Exception as ex:
+            scrivi_log("LibriVoxView._sincronizza_pagina", ex)
+
+    def _eventi_catalogo(self):
+        try:
+            if self._pagina_catalogo is not None:
+                self._sincronizza_pagina(self._pagina_catalogo)
+        except Exception as ex:
+            scrivi_log("LibriVoxView._eventi_catalogo", ex)
+
+    def apri_avanzamento_catalogo(self):
+        try:
+            if not self.catalogo.aggiornamento_in_corso and not self.catalogo.eventi():
+                self.finestra.mostra_messaggio("Nessun download del catalogo in corso.")
+                return
+            pagina = self._pagina_avanzamento()
+            if pagina is None:
+                self.finestra.mostra_messaggio("Impossibile mostrare l'avanzamento del download.", ERRORE_LOG)
+                return
+            self._sincronizza_pagina(pagina)
+            if self.finestra.in_pagina() and self.finestra.titolo_corrente() == TITOLO_AVANZAMENTO_CATALOGO:
+                if self.finestra.current_source is pagina:
+                    return
+                self.finestra.go_back()
+            self.finestra.mostra_pagina(pagina)
+        except Exception as ex:
+            scrivi_log("LibriVoxView.apri_avanzamento_catalogo", ex)
+
+    def annulla_catalogo(self):
+        try:
+            if not self.catalogo.aggiornamento_in_corso:
+                self.finestra.mostra_messaggio("Nessun download del catalogo in corso.")
+                return
+            if not self.finestra.chiedi_conferma(
+                "Annullare il download del catalogo di LibriVox?",
+                "Il catalogo già presente resta invariato.",
+            ):
+                return
+            if self.catalogo.annulla_aggiornamento():
+                self.finestra.mostra_stato("Annullamento del download del catalogo richiesto.")
+            else:
+                self.finestra.mostra_messaggio("Impossibile annullare il download del catalogo.", ERRORE_LOG)
+        except Exception as ex:
+            scrivi_log("LibriVoxView.annulla_catalogo", ex)
 
     def _catalogo_aggiornato(self, esito):
         try:
             self._ricarica_se(TITOLO_MENU)
+            if esito.get("annullato"):
+                self.finestra.mostra_stato("Download del catalogo di LibriVox annullato.")
+                self.finestra.notifica_operazione("LibriVox", "Download del catalogo annullato.")
+                return
             if esito.get("errore"):
+                self.finestra.notifica_operazione("LibriVox", "Download del catalogo non riuscito.")
                 self.finestra.mostra_messaggio(
                     "Download del catalogo di LibriVox non riuscito.",
                     f"Controllare la connessione e riprovare. {ERRORE_LOG}",
                 )
                 return
-            self.finestra.mostra_stato(
-                f"Catalogo di LibriVox aggiornato: {conta(esito.get('libri', 0), 'audiolibro', 'audiolibri')}."
-            )
+            testo = f"Catalogo di LibriVox aggiornato: {conta(esito.get('libri', 0), 'audiolibro', 'audiolibri')}."
+            self.finestra.mostra_stato(testo)
+            self.finestra.notifica_operazione("LibriVox", testo)
         except Exception as ex:
             scrivi_log("LibriVoxView._catalogo_aggiornato", ex)
 
@@ -214,7 +315,7 @@ class LibriVoxView:
             for autore in self.catalogo.autori_libro(libro.id):
                 azioni.append((f"Altre opere di {autore.nome()}", partial(self.apri_autore, autore, None), None))
             if recente:
-                azioni.append(("Rimuovi dagli audiolibri recenti", partial(self.libreria.rimuovi_recente, libro.id), None))
+                azioni.append(("Rimuovi dagli audiolibri recenti", partial(self.rimuovi_recente, libro), None))
                 azioni.append(("Svuota gli audiolibri recenti", self.svuota_recenti, None))
             azioni.append(("Informazioni sull'audiolibro", partial(self.informazioni, libro), None))
             if libro.url_librivox:
@@ -744,10 +845,23 @@ class LibriVoxView:
             scrivi_log("LibriVoxView._voci_recenti", ex)
         return voci
 
+    def rimuovi_recente(self, libro):
+        try:
+            if self.libreria.rimuovi_recente(libro.id):
+                self.finestra.mostra_stato("Audiolibro rimosso dai recenti.")
+            else:
+                self.finestra.mostra_messaggio("Impossibile rimuovere l'audiolibro dai recenti.", ERRORE_LOG)
+        except Exception as ex:
+            scrivi_log(f"LibriVoxView.rimuovi_recente ({getattr(libro, 'id', '')})", ex)
+
     def svuota_recenti(self):
         try:
-            if self.finestra.chiedi_conferma("Svuotare l'elenco degli audiolibri recenti?"):
-                self.libreria.svuota_recenti()
+            if not self.finestra.chiedi_conferma("Svuotare l'elenco degli audiolibri recenti?"):
+                return
+            if self.libreria.svuota_recenti():
+                self.finestra.mostra_stato("Elenco degli audiolibri recenti svuotato.")
+            else:
+                self.finestra.mostra_messaggio("Impossibile svuotare l'elenco dei recenti.", ERRORE_LOG)
         except Exception as ex:
             scrivi_log("LibriVoxView.svuota_recenti", ex)
 
@@ -824,6 +938,28 @@ class LibriVoxView:
         except Exception as ex:
             scrivi_log(f"LibriVoxView.apri_cartella ({getattr(libro, 'id', '')})", ex)
 
+    def annulla_tutti_download(self):
+        try:
+            elementi = [elemento for elemento in self.downloads.in_corso() if elemento["stato"] != scaricamenti.STATO_ERRORE]
+            if not elementi:
+                self.finestra.mostra_messaggio("Nessun download di audiolibri in corso.")
+                return
+            if not self.finestra.chiedi_conferma(
+                f"Annullare {conta(len(elementi), 'download', 'download')} di audiolibri?",
+                "I capitoli già scaricati verranno cancellati.",
+            ):
+                return
+            falliti = 0
+            for elemento in elementi:
+                if not self.downloads.elimina(elemento["libro"].id):
+                    falliti += 1
+            if falliti:
+                self.finestra.mostra_messaggio(f"Non è stato possibile annullare {conta(falliti, 'download', 'download')}.", ERRORE_LOG)
+            else:
+                self.finestra.mostra_stato("Download degli audiolibri annullati.")
+        except Exception as ex:
+            scrivi_log("LibriVoxView.annulla_tutti_download", ex)
+
     def apri_scaricati(self):
         try:
             self.finestra.push_menu(TITOLO_SCARICATI, self._voci_scaricati, "Nessun audiolibro scaricato.")
@@ -881,6 +1017,7 @@ class LibriVoxView:
         try:
             self._ricarica_se(TITOLO_DOWNLOAD, TITOLO_SCARICATI, TITOLO_MENU)
             self.finestra.mostra_stato(f"Audiolibro scaricato: {libro.title}.")
+            self.finestra.notifica_operazione("Audiolibro scaricato", libro.title)
         except Exception as ex:
             scrivi_log("LibriVoxView.download_completato", ex)
 
@@ -888,5 +1025,6 @@ class LibriVoxView:
         try:
             self._ricarica_se(TITOLO_DOWNLOAD, TITOLO_MENU)
             self.finestra.mostra_stato(f"Download non riuscito: {libro.title}. Riprovare da {TITOLO_DOWNLOAD}.")
+            self.finestra.notifica_operazione("Download non riuscito", libro.title)
         except Exception as ex:
             scrivi_log("LibriVoxView.download_fallito", ex)

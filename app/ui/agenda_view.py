@@ -63,11 +63,13 @@ SCELTA_OCCORRENZA = 0
 SCELTA_SERIE = 1
 
 
-def conta(numero, singolare, plurale):
+def appuntamenti(numero):
     try:
-        return f"1 {singolare}" if numero == 1 else f"{numero} {plurale}"
+        if numero == 0:
+            return "nessun appuntamento"
+        return "1 appuntamento" if numero == 1 else f"{numero} appuntamenti"
     except Exception as ex:
-        scrivi_log("agenda_view.conta", ex)
+        scrivi_log("agenda_view.appuntamenti", ex)
         return str(numero)
 
 
@@ -88,25 +90,22 @@ class AgendaView:
     def get_menu_items(self):
         try:
             oggi = self._oggi()
+            domani = oggi + timedelta(days=1)
             voci = [
-                (f"Oggi, {conta(len(self.store.occorrenze_giorno(oggi)), 'appuntamento', 'appuntamenti')}", partial(self.apri_giorno, oggi), None),
-                (
-                    f"Domani, {conta(len(self.store.occorrenze_giorno(oggi + timedelta(days=1))), 'appuntamento', 'appuntamenti')}",
-                    partial(self.apri_giorno, oggi + timedelta(days=1)),
-                    None,
-                ),
-                (f"Prossimi 7 giorni, {conta(len(self._periodo(oggi, 7)), 'appuntamento', 'appuntamenti')}", partial(self.apri_periodo, 7), None),
-                (f"Prossimi 30 giorni, {conta(len(self._periodo(oggi, 30)), 'appuntamento', 'appuntamenti')}", partial(self.apri_periodo, 30), None),
-                ("Consulta un giorno", self.chiedi_giorno, None),
-                (f"Consulta il mese di {nome_mese(oggi.year, oggi.month)}", partial(self.apri_mese, oggi.year, oggi.month), None),
+                ("Nuovo appuntamento", partial(self.aggiungi, None), None),
+                (f"Appuntamenti di oggi: {appuntamenti(len(self.store.occorrenze_giorno(oggi)))}", partial(self.apri_giorno, oggi), None),
+                (f"Appuntamenti di domani: {appuntamenti(len(self.store.occorrenze_giorno(domani)))}", partial(self.apri_giorno, domani), None),
+                (f"Appuntamenti dei prossimi 7 giorni: {appuntamenti(len(self._periodo(oggi, 7)))}", partial(self.apri_periodo, 7), None),
+                (f"Appuntamenti dei prossimi 30 giorni: {appuntamenti(len(self._periodo(oggi, 30)))}", partial(self.apri_periodo, 30), None),
+                ("Appuntamenti di un altro giorno", self.chiedi_giorno, None),
+                (f"Appuntamenti del mese di {nome_mese(oggi.year, oggi.month)}", partial(self.apri_mese, oggi.year, oggi.month), None),
                 ("Cerca un appuntamento", self.cerca, None),
                 (TITOLO_TUTTI, self.apri_tutti, None),
-                ("Aggiungi un appuntamento", partial(self.aggiungi, None), None),
             ]
             return voci
         except Exception as ex:
             scrivi_log("AgendaView.get_menu_items", ex)
-            return [("Aggiungi un appuntamento", partial(self.aggiungi, None), None)]
+            return [("Nuovo appuntamento", partial(self.aggiungi, None), None)]
 
     def _periodo(self, giorno, giorni):
         try:
@@ -180,7 +179,7 @@ class AgendaView:
             if aggiuntive:
                 azioni.extend(aggiuntive)
             else:
-                azioni.append(("Aggiungi un appuntamento", partial(self.aggiungi, None), None))
+                azioni.append(("Nuovo appuntamento", partial(self.aggiungi, None), None))
             return azioni
         except Exception as ex:
             scrivi_log("AgendaView._azioni_voce_occorrenza", ex)
@@ -223,11 +222,11 @@ class AgendaView:
             precedente = giorno - timedelta(days=1)
             successivo = giorno + timedelta(days=1)
             return [
-                ("Aggiungi un appuntamento in questo giorno", partial(self.aggiungi, giorno), None),
+                ("Nuovo appuntamento in questo giorno", partial(self.aggiungi, giorno), None),
                 (f"Giorno successivo: {data_estesa(successivo, self._oggi())}", partial(self._vai_al_giorno, successivo), None),
                 (f"Giorno precedente: {data_estesa(precedente, self._oggi())}", partial(self._vai_al_giorno, precedente), None),
                 ("Vai a un altro giorno", partial(self._chiedi_altro_giorno, giorno), None),
-                (f"Consulta il mese di {nome_mese(giorno.year, giorno.month)}", partial(self.apri_mese, giorno.year, giorno.month), None),
+                (f"Appuntamenti del mese di {nome_mese(giorno.year, giorno.month)}", partial(self.apri_mese, giorno.year, giorno.month), None),
             ]
         except Exception as ex:
             scrivi_log(f"AgendaView._azioni_giorno ({giorno})", ex)
@@ -260,7 +259,7 @@ class AgendaView:
     def chiedi_giorno(self):
         try:
             testo = self.finestra.chiedi_testo(
-                "Consulta un giorno",
+                "Appuntamenti di un altro giorno",
                 "Data da consultare (gg/mm/aaaa, oppure oggi, domani)",
                 data_breve(self._oggi()),
             )
@@ -304,7 +303,7 @@ class AgendaView:
                     partial(self._vai_al_mese, anno_precedente, mese_precedente),
                     None,
                 ),
-                ("Aggiungi un appuntamento", partial(self.aggiungi, None), None),
+                ("Nuovo appuntamento", partial(self.aggiungi, None), None),
             ]
         except Exception as ex:
             scrivi_log(f"AgendaView._azioni_mese ({anno}, {mese})", ex)
@@ -314,10 +313,10 @@ class AgendaView:
         try:
             azioni = [
                 ("Apri il giorno", partial(self.apri_giorno, giorno), None),
-                ("Aggiungi un appuntamento in questo giorno", partial(self.aggiungi, giorno), None),
+                ("Nuovo appuntamento in questo giorno", partial(self.aggiungi, giorno), None),
             ]
             azioni.extend(
-                voce for voce in self._azioni_mese(giorno.year, giorno.month) if not voce[0].startswith("Aggiungi")
+                voce for voce in self._azioni_mese(giorno.year, giorno.month) if not voce[0].startswith("Nuovo")
             )
             return azioni
         except Exception as ex:
@@ -331,7 +330,7 @@ class AgendaView:
             for giorno in sorted(conteggi):
                 voci.append(
                     (
-                        f"{data_estesa(giorno, self._oggi())}, {conta(conteggi[giorno], 'appuntamento', 'appuntamenti')}",
+                        f"{data_estesa(giorno, self._oggi())}: {appuntamenti(conteggi[giorno])}",
                         partial(self.apri_giorno, giorno),
                         partial(self._azioni_giorno_del_mese, giorno),
                     )
@@ -465,7 +464,7 @@ class AgendaView:
             azioni.append(("Copia questa informazione", partial(self.copia, valore), None))
             azioni.append(
                 (
-                    f"Aggiungi un appuntamento {data_estesa(occorrenza.inizio.date(), self._oggi())}",
+                    f"Nuovo appuntamento per {data_estesa(occorrenza.inizio.date(), self._oggi())}",
                     partial(self.aggiungi, occorrenza.inizio.date()),
                     None,
                 )

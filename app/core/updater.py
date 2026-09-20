@@ -10,10 +10,11 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 
-from gi.repository import Gdk, GLib, Gtk
+from gi.repository import Gdk, GLib, GObject, Gtk
 
 from app.core import percorsi
 from app.core.log import scrivi_log
+from app.ui import messaggi
 
 REPOSITORY_URL = "https://github.com/gabrielpappalardo2001/linuxeasy.git"
 NOME_REPOSITORY = "repository"
@@ -288,7 +289,7 @@ class FinestraAggiornamento(Gtk.ApplicationWindow):
         self._timer_pulsazione = 0
         self.etichetta = None
         self.barra = None
-        self.lista = None
+        self.testo = None
         try:
             self.set_default_size(640, 420)
             self._crea_interfaccia()
@@ -307,14 +308,18 @@ class FinestraAggiornamento(Gtk.ApplicationWindow):
         self.barra = Gtk.ProgressBar()
         self.barra.set_show_text(True)
         contenitore.pack_start(self.barra, False, False, 0)
-        self.lista = Gtk.ListBox()
-        self.lista.set_selection_mode(Gtk.SelectionMode.SINGLE)
-        accessibile = self.lista.get_accessible()
+        self.testo = Gtk.TextView()
+        self.testo.set_editable(False)
+        self.testo.set_cursor_visible(True)
+        self.testo.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        self.testo.set_left_margin(8)
+        self.testo.set_right_margin(8)
+        accessibile = self.testo.get_accessible()
         if accessibile is not None:
             accessibile.set_name("Avanzamento dell'aggiornamento")
         scorrimento = Gtk.ScrolledWindow()
         scorrimento.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        scorrimento.add(self.lista)
+        scorrimento.add(self.testo)
         contenitore.pack_start(scorrimento, True, True, 0)
         self.add(contenitore)
 
@@ -322,6 +327,7 @@ class FinestraAggiornamento(Gtk.ApplicationWindow):
         try:
             self.show_all()
             self.present()
+            self.testo.grab_focus()
             self._aggiungi_passo("Controllo degli aggiornamenti in corso. Premere Escape per avviare subito il programma.")
             self.barra.set_text("Controllo")
             self._timer_pulsazione = GLib.timeout_add(MILLISECONDI_PULSAZIONE, self._pulsa)
@@ -350,21 +356,26 @@ class FinestraAggiornamento(Gtk.ApplicationWindow):
         except Exception as ex:
             scrivi_log("FinestraAggiornamento._ferma_pulsazione", ex)
 
+    def _annuncia(self, testo):
+        try:
+            accessibile = self.testo.get_accessible()
+            if accessibile is not None and GObject.signal_lookup("announcement", accessibile.__gtype__) != 0:
+                accessibile.emit("announcement", testo)
+        except Exception as ex:
+            scrivi_log(f"FinestraAggiornamento._annuncia ({testo})", ex)
+
     def _aggiungi_passo(self, testo):
         try:
             self.etichetta.set_text(testo)
-            riga = Gtk.ListBoxRow()
-            testo_riga = Gtk.Label(label=testo)
-            testo_riga.set_xalign(0)
-            testo_riga.set_line_wrap(True)
-            riga.add(testo_riga)
-            accessibile = riga.get_accessible()
-            if accessibile is not None:
-                accessibile.set_name(testo)
-            self.lista.add(riga)
-            riga.show_all()
-            self.lista.select_row(riga)
-            riga.grab_focus()
+            buffer = self.testo.get_buffer()
+            fine = buffer.get_end_iter()
+            cursore = buffer.get_iter_at_mark(buffer.get_insert())
+            segue = buffer.get_char_count() == 0 or cursore.get_line() == fine.get_line()
+            buffer.insert(fine, f"\n{testo}" if buffer.get_char_count() > 0 else testo)
+            if segue:
+                buffer.place_cursor(buffer.get_iter_at_line(buffer.get_line_count() - 1))
+                self.testo.scroll_to_mark(buffer.get_insert(), 0.0, False, 0.0, 0.0)
+            self._annuncia(testo)
         except Exception as ex:
             scrivi_log(f"FinestraAggiornamento._aggiungi_passo ({testo})", ex)
 
@@ -397,70 +408,23 @@ class FinestraAggiornamento(Gtk.ApplicationWindow):
             self._termina()
         return False
 
-    def _collega_escape(self, dialogo, risposta):
-        try:
-            dialogo.connect("key-press-event", self._tasto_nel_dialogo, risposta)
-        except Exception as ex:
-            scrivi_log("FinestraAggiornamento._collega_escape", ex)
-
-    def _tasto_nel_dialogo(self, dialogo, evento, risposta):
-        try:
-            if Gdk.keyval_name(evento.keyval) == "Escape":
-                dialogo.response(risposta)
-                return True
-        except Exception as ex:
-            scrivi_log("FinestraAggiornamento._tasto_nel_dialogo", ex)
-        return False
-
     def _chiedi_conferma(self, esito):
-        dialogo = None
         try:
-            dialogo = Gtk.MessageDialog(
-                transient_for=self,
-                modal=True,
-                message_type=Gtk.MessageType.QUESTION,
-                buttons=Gtk.ButtonsType.YES_NO,
-                text=f"È disponibile un aggiornamento di {percorsi.NOME_PROGRAMMA}. Installarlo adesso?",
+            dettaglio = f"Nuova versione: {esito.descrizione}" if esito.descrizione else ""
+            return messaggi.chiedi_conferma(
+                self,
+                f"È disponibile un aggiornamento di {percorsi.NOME_PROGRAMMA}. Installarlo adesso?",
+                dettaglio,
             )
-            dialogo.set_title(TITOLO_FINESTRA)
-            if esito.descrizione:
-                dialogo.format_secondary_text(f"Nuova versione: {esito.descrizione}")
-            dialogo.set_default_response(Gtk.ResponseType.YES)
-            self._collega_escape(dialogo, Gtk.ResponseType.NO)
-            return dialogo.run() == Gtk.ResponseType.YES
         except Exception as ex:
             scrivi_log("FinestraAggiornamento._chiedi_conferma", ex)
             return False
-        finally:
-            try:
-                if dialogo is not None:
-                    dialogo.destroy()
-            except Exception as ex:
-                scrivi_log("FinestraAggiornamento._chiedi_conferma distruzione", ex)
 
     def _mostra_messaggio(self, testo, dettaglio=""):
-        dialogo = None
         try:
-            dialogo = Gtk.MessageDialog(
-                transient_for=self,
-                modal=True,
-                message_type=Gtk.MessageType.INFO,
-                buttons=Gtk.ButtonsType.CLOSE,
-                text=testo,
-            )
-            dialogo.set_title(TITOLO_FINESTRA)
-            if dettaglio:
-                dialogo.format_secondary_text(dettaglio)
-            self._collega_escape(dialogo, Gtk.ResponseType.CLOSE)
-            dialogo.run()
+            messaggi.mostra_messaggio(self, testo, dettaglio)
         except Exception as ex:
             scrivi_log(f"FinestraAggiornamento._mostra_messaggio ({testo})", ex)
-        finally:
-            try:
-                if dialogo is not None:
-                    dialogo.destroy()
-            except Exception as ex:
-                scrivi_log("FinestraAggiornamento._mostra_messaggio distruzione", ex)
 
     def _avvia_installazione(self):
         try:

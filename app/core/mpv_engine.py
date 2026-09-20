@@ -180,7 +180,7 @@ class MPVEngine:
             try:
                 self.player = mpv.MPV(**opzioni)
             except Exception as ex:
-                scrivi_log("MPVEngine._crea_player: opzioni complete rifiutate, uso quelle minime", ex)
+                scrivi_log("MPVEngine._crea_player: opzioni complete rifiutate, uso quelle minime", ex, conta=False)
                 minime = {
                     "ytdl": True,
                     "input_default_bindings": False,
@@ -426,7 +426,7 @@ class MPVEngine:
                     self.player.pause = False
                     self.player.play(url)
                 except Exception as ex:
-                    scrivi_log(f"MPVEngine.play: play non riuscito, provo loadfile ({url})", ex)
+                    scrivi_log(f"MPVEngine.play: play non riuscito, provo loadfile ({url})", ex, conta=False)
                     self.player.command("loadfile", url, "replace")
             self._richiedi_ripristino(str(url), kind)
             return True
@@ -551,7 +551,7 @@ class MPVEngine:
                 try:
                     self.player.stop()
                 except Exception as ex:
-                    scrivi_log("MPVEngine.stop: stop non riuscito, provo il comando", ex)
+                    scrivi_log("MPVEngine.stop: stop non riuscito, provo il comando", ex, conta=False)
                     self.player.command("stop")
                 self._titoli_coda = []
                 self.playlist_length = 0

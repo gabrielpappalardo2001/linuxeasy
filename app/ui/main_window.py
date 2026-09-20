@@ -1,4 +1,4 @@
-from app.core.log import installa_gestori_globali, scrivi_log
+from app.core.log import errori_thread, installa_gestori_globali, scrivi_log
 
 installa_gestori_globali()
 
@@ -46,7 +46,8 @@ from app.ui.control_center_view import ControlCenterView
 from app.rubrica.rubrica_store import RubricaStore
 from app.ui.agenda_view import AgendaView
 from app.ui.librivox_view import LibriVoxView
-from app.ui.modulo_dialogo import chiedi_modulo
+from app.ui import messaggi
+from app.ui.modulo_dialogo import chiedi_modulo, chiedi_testo
 from app.ui.news_view import NewsView
 from app.ui.pagina import PaginaTesto
 from app.ui.podcast_view import PodcastView
@@ -88,6 +89,9 @@ TITOLO_ASCOLTO_PREDEFINITO = "Ascolto in corso"
 ID_NOTIFICA_EPISODI = "linuxeasy-nuovi-episodi"
 ID_NOTIFICA_NOTIZIE = "linuxeasy-nuove-notizie"
 ID_NOTIFICA_AGENDA = "linuxeasy-appuntamenti"
+ID_NOTIFICA_OPERAZIONI = "linuxeasy-operazioni"
+SECONDI_SINCRONIZZAZIONE = 2
+ERRORE_LOG = "I dettagli sono nel file di log."
 VISTA_LISTA = "lista"
 VISTA_TESTO = "testo"
 ALTEZZA_AREA_VIDEO = 360
@@ -106,6 +110,9 @@ class MainWindow(Gtk.ApplicationWindow):
         self.player_screen_active = False
         self._navigazione = 0
         self._timer_stato = 0
+        self._timer_centro = 0
+        self._feedback_azione = False
+        self._uscita_confermata = False
         self._annunci_disponibili = False
         self._video_presente = False
         self.box = None
@@ -158,10 +165,12 @@ class MainWindow(Gtk.ApplicationWindow):
             self._crea_servizi()
             self._crea_interfaccia()
             self.connect("key-press-event", self.on_key_press)
+            self.connect("delete-event", self._alla_chiusura)
             self.connect("destroy", self._alla_distruzione)
             self.show_main_menu()
             self._avvia_servizi()
             GLib.idle_add(self._collega_area_video)
+            self._timer_centro = GLib.timeout_add_seconds(SECONDI_SINCRONIZZAZIONE, self._sincronizza_centro_controllo)
         except Exception as ex:
             scrivi_log("MainWindow.__init__", ex)
 
@@ -394,6 +403,9 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _alla_distruzione(self, widget):
         try:
+            if self._timer_centro:
+                GLib.source_remove(self._timer_centro)
+                self._timer_centro = 0
             if self.podcast_notifier is not None:
                 self.podcast_notifier.ferma()
             if self.news_updater is not None:
@@ -436,7 +448,15 @@ class MainWindow(Gtk.ApplicationWindow):
             scrivi_log("MainWindow.show_main_menu", ex)
 
     def _modulo_non_disponibile(self, nome):
-        self.mostra_messaggio(f"Il modulo {nome} non è disponibile.", "I dettagli sono nel file di log.")
+        self.mostra_messaggio(f"Il modulo {nome} non è disponibile.", ERRORE_LOG)
+
+    def _sincronizza_centro_controllo(self):
+        try:
+            if self.titolo_corrente() == TITOLO_CENTRO_CONTROLLO and not self.in_pagina():
+                self.ricarica_menu_corrente(annuncia_vuoto=False)
+        except Exception as ex:
+            scrivi_log("MainWindow._sincronizza_centro_controllo", ex)
+        return True
 
     def open_radio_menu(self):
         try:
@@ -969,6 +989,25 @@ class MainWindow(Gtk.ApplicationWindow):
         except Exception as ex:
             scrivi_log(f"MainWindow._costruisci_pagina ({titolo})", ex)
 
+    def aggiungi_riga_pagina(self, pagina, riga):
+        try:
+            if self._rimanda_al_thread_principale(self.aggiungi_riga_pagina, pagina, riga):
+                return
+            pagina.aggiungi(riga)
+            if self.current_source is not pagina or not self.in_pagina():
+                return
+            buffer = self.textview.get_buffer()
+            fine = buffer.get_end_iter()
+            cursore = buffer.get_iter_at_mark(buffer.get_insert())
+            segue = buffer.get_char_count() == 0 or cursore.get_line() == fine.get_line()
+            buffer.insert(fine, f"\n{riga}" if buffer.get_char_count() > 0 else riga)
+            if segue:
+                buffer.place_cursor(buffer.get_iter_at_line(buffer.get_line_count() - 1))
+                GLib.idle_add(self._scorri_al_cursore)
+            self.annuncia(riga)
+        except Exception as ex:
+            scrivi_log("MainWindow.aggiungi_riga_pagina", ex)
+
     def _scorri_al_cursore(self):
         try:
             if self.in_pagina():
@@ -1084,13 +1123,24 @@ class MainWindow(Gtk.ApplicationWindow):
         except Exception as ex:
             scrivi_log("MainWindow.ricarica_menu_corrente", ex)
 
+    def _esegui_con_esito(self, azione):
+        try:
+            errori_prima = errori_thread()
+            self._feedback_azione = False
+            azione()
+            if errori_thread() > errori_prima and not self._feedback_azione:
+                self.mostra_messaggio("L'operazione non è riuscita.", ERRORE_LOG)
+        except Exception as ex:
+            scrivi_log("MainWindow._esegui_con_esito", ex)
+            self.mostra_messaggio("L'operazione non è riuscita.", ERRORE_LOG)
+
     def _attiva(self, indice):
         try:
             self.menu_positions[self.titolo_corrente()] = indice
             if 0 <= indice < len(self.current_items):
                 azione = self.current_items[indice][1]
                 if callable(azione):
-                    azione()
+                    self._esegui_con_esito(azione)
         except Exception as ex:
             scrivi_log(f"MainWindow._attiva ({indice})", ex)
 
@@ -1119,7 +1169,7 @@ class MainWindow(Gtk.ApplicationWindow):
             self.go_back()
             token = self._navigazione
             if callable(azione):
-                azione()
+                self._esegui_con_esito(azione)
             if token == self._navigazione:
                 self.ricarica_menu_corrente()
         except Exception as ex:
@@ -1322,105 +1372,30 @@ class MainWindow(Gtk.ApplicationWindow):
             scrivi_log(f"MainWindow._lavoro_concluso ({titolo})", ex)
         return False
 
-    def _collega_escape(self, dialogo, risposta):
-        try:
-            dialogo.connect("key-press-event", self._tasto_nel_dialogo, risposta)
-        except Exception as ex:
-            scrivi_log("MainWindow._collega_escape", ex)
-
-    def _tasto_nel_dialogo(self, dialogo, evento, risposta):
-        try:
-            if Gdk.keyval_name(evento.keyval) == "Escape":
-                dialogo.response(risposta)
-                return True
-            return False
-        except Exception as ex:
-            scrivi_log("MainWindow._tasto_nel_dialogo", ex)
-            return False
-
     def mostra_messaggio(self, testo, dettaglio=""):
-        dialogo = None
         try:
-            dialogo = Gtk.MessageDialog(
-                transient_for=self,
-                modal=True,
-                message_type=Gtk.MessageType.INFO,
-                buttons=Gtk.ButtonsType.CLOSE,
-                text=testo,
-            )
-            dialogo.set_title(NOME_PROGRAMMA)
-            if dettaglio:
-                dialogo.format_secondary_text(dettaglio)
-            self._collega_escape(dialogo, Gtk.ResponseType.CLOSE)
-            dialogo.run()
+            self._feedback_azione = True
+            messaggi.mostra_messaggio(self, testo, dettaglio)
         except Exception as ex:
             scrivi_log(f"MainWindow.mostra_messaggio ({testo})", ex)
-        finally:
-            try:
-                if dialogo is not None:
-                    dialogo.destroy()
-            except Exception as ex:
-                scrivi_log("MainWindow.mostra_messaggio distruzione", ex)
 
-    def chiedi_conferma(self, domanda, dettaglio=""):
-        dialogo = None
+    def chiedi_conferma(self, domanda, dettaglio="", predefinita_si=True):
         try:
-            dialogo = Gtk.MessageDialog(
-                transient_for=self,
-                modal=True,
-                message_type=Gtk.MessageType.QUESTION,
-                buttons=Gtk.ButtonsType.YES_NO,
-                text=domanda,
-            )
-            dialogo.set_title(NOME_PROGRAMMA)
-            if dettaglio:
-                dialogo.format_secondary_text(dettaglio)
-            self._collega_escape(dialogo, Gtk.ResponseType.NO)
-            return dialogo.run() == Gtk.ResponseType.YES
+            return messaggi.chiedi_conferma(self, domanda, dettaglio, predefinita_si)
         except Exception as ex:
             scrivi_log(f"MainWindow.chiedi_conferma ({domanda})", ex)
             return False
-        finally:
-            try:
-                if dialogo is not None:
-                    dialogo.destroy()
-            except Exception as ex:
-                scrivi_log("MainWindow.chiedi_conferma distruzione", ex)
 
     def chiedi_scelta(self, domanda, opzioni, dettaglio=""):
-        dialogo = None
         try:
-            dialogo = Gtk.MessageDialog(
-                transient_for=self,
-                modal=True,
-                message_type=Gtk.MessageType.QUESTION,
-                buttons=Gtk.ButtonsType.NONE,
-                text=domanda,
-            )
-            dialogo.set_title(NOME_PROGRAMMA)
-            if dettaglio:
-                dialogo.format_secondary_text(dettaglio)
-            for posizione, testo in enumerate(opzioni):
-                dialogo.add_button(testo, posizione)
-            dialogo.add_button("Annulla", Gtk.ResponseType.CANCEL)
-            if opzioni:
-                dialogo.set_default_response(0)
-            self._collega_escape(dialogo, Gtk.ResponseType.CANCEL)
-            risposta = dialogo.run()
-            return risposta if isinstance(risposta, int) and 0 <= risposta < len(opzioni) else -1
+            return messaggi.chiedi_scelta(self, domanda, opzioni, dettaglio)
         except Exception as ex:
             scrivi_log(f"MainWindow.chiedi_scelta ({domanda})", ex)
             return -1
-        finally:
-            try:
-                if dialogo is not None:
-                    dialogo.destroy()
-            except Exception as ex:
-                scrivi_log("MainWindow.chiedi_scelta distruzione", ex)
 
-    def chiedi_modulo(self, titolo, campi, convalida=None, testo_conferma="Salva", campo_iniziale=None):
+    def chiedi_modulo(self, titolo, campi, convalida=None, campo_iniziale=None):
         try:
-            return chiedi_modulo(self, titolo, campi, convalida, testo_conferma, campo_iniziale)
+            return chiedi_modulo(self, titolo, campi, convalida, campo_iniziale)
         except Exception as ex:
             scrivi_log(f"MainWindow.chiedi_modulo ({titolo})", ex)
             return None
@@ -1432,43 +1407,11 @@ class MainWindow(Gtk.ApplicationWindow):
             scrivi_log(f"MainWindow.apri_azioni ({etichetta})", ex)
 
     def chiedi_testo(self, titolo, domanda, testo_iniziale=""):
-        dialogo = None
         try:
-            dialogo = Gtk.Dialog(title=titolo, transient_for=self, modal=True)
-            dialogo.add_button("Annulla", Gtk.ResponseType.CANCEL)
-            dialogo.add_button("Conferma", Gtk.ResponseType.OK)
-            dialogo.set_default_response(Gtk.ResponseType.OK)
-            area = dialogo.get_content_area()
-            area.set_spacing(6)
-            area.set_border_width(10)
-            etichetta = Gtk.Label(label=domanda)
-            etichetta.set_xalign(0)
-            campo = Gtk.Entry()
-            campo.set_text(testo_iniziale or "")
-            campo.set_activates_default(True)
-            etichetta.set_mnemonic_widget(campo)
-            accessibile = campo.get_accessible()
-            if accessibile is not None:
-                accessibile.set_name(domanda)
-            area.pack_start(etichetta, False, False, 0)
-            area.pack_start(campo, False, False, 0)
-            self._collega_escape(dialogo, Gtk.ResponseType.CANCEL)
-            dialogo.show_all()
-            campo.grab_focus()
-            risposta = dialogo.run()
-            testo = " ".join(campo.get_text().split())
-            if risposta == Gtk.ResponseType.OK and testo:
-                return testo
-            return None
+            return chiedi_testo(self, titolo, domanda, testo_iniziale)
         except Exception as ex:
             scrivi_log(f"MainWindow.chiedi_testo ({titolo})", ex)
             return None
-        finally:
-            try:
-                if dialogo is not None:
-                    dialogo.destroy()
-            except Exception as ex:
-                scrivi_log("MainWindow.chiedi_testo distruzione", ex)
 
     def apri_nel_browser(self, indirizzo):
         try:
@@ -1478,7 +1421,7 @@ class MainWindow(Gtk.ApplicationWindow):
                 Gio.AppInfo.launch_default_for_uri(indirizzo, None)
                 return True
             except Exception as ex:
-                scrivi_log(f"MainWindow.apri_nel_browser: apertura predefinita non riuscita ({indirizzo})", ex)
+                scrivi_log(f"MainWindow.apri_nel_browser: apertura predefinita non riuscita ({indirizzo})", ex, conta=False)
             programma = shutil.which("xdg-open")
             if programma:
                 subprocess.Popen(
@@ -1532,6 +1475,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def mostra_stato(self, testo):
         try:
+            self._feedback_azione = True
             if self._timer_stato:
                 GLib.source_remove(self._timer_stato)
                 self._timer_stato = 0
@@ -1667,6 +1611,12 @@ class MainWindow(Gtk.ApplicationWindow):
         except Exception as ex:
             scrivi_log("MainWindow.notifica_appuntamenti", ex)
 
+    def notifica_operazione(self, titolo, testo):
+        try:
+            self._notifica_desktop(ID_NOTIFICA_OPERAZIONI, titolo, testo)
+        except Exception as ex:
+            scrivi_log(f"MainWindow.notifica_operazione ({titolo})", ex)
+
     def _notifica_desktop(self, identificativo, titolo, testo):
         try:
             applicazione = self.get_application()
@@ -1694,6 +1644,7 @@ class MainWindow(Gtk.ApplicationWindow):
             if self.titolo_corrente() in ("Download in corso", "Episodi scaricati") and not self.in_pagina():
                 self.ricarica_menu_corrente(annuncia_vuoto=False)
             self.mostra_stato(f"Download completato: {episodio.title}")
+            self.notifica_operazione("Download completato", episodio.title)
         except Exception as ex:
             scrivi_log("MainWindow._download_completato", ex)
 
@@ -1704,6 +1655,7 @@ class MainWindow(Gtk.ApplicationWindow):
             if self.titolo_corrente() == "Download in corso" and not self.in_pagina():
                 self.ricarica_menu_corrente(annuncia_vuoto=False)
             self.mostra_stato(f"Download non riuscito: {episodio.title}")
+            self.notifica_operazione("Download non riuscito", episodio.title)
         except Exception as ex:
             scrivi_log("MainWindow._download_fallito", ex)
 
@@ -1767,9 +1719,54 @@ class MainWindow(Gtk.ApplicationWindow):
             scrivi_log("MainWindow._annuncia_traccia", ex)
         return False
 
+    def attivita_in_corso(self):
+        elenco = []
+        try:
+            if self.librivox_catalog is not None and self.librivox_catalog.aggiornamento_in_corso:
+                elenco.append("il download del catalogo di LibriVox")
+            if self.librivox_downloads is not None:
+                attivi = [voce for voce in self.librivox_downloads.in_corso() if voce["stato"] != "errore"]
+                if attivi:
+                    elenco.append(f"{len(attivi)} download di audiolibri" if len(attivi) > 1 else "1 download di audiolibro")
+            if self.podcast_downloads is not None:
+                totale = len(self.podcast_downloads.in_corso())
+                if totale:
+                    elenco.append(f"{totale} download di episodi" if totale > 1 else "1 download di episodio")
+        except Exception as ex:
+            scrivi_log("MainWindow.attivita_in_corso", ex)
+        return elenco
+
+    def _testo_attivita(self, elenco):
+        try:
+            if len(elenco) == 1:
+                return elenco[0]
+            return ", ".join(elenco[:-1]) + " e " + elenco[-1]
+        except Exception as ex:
+            scrivi_log("MainWindow._testo_attivita", ex)
+            return ""
+
     def confirm_exit(self):
         try:
-            if self.chiedi_conferma("Vuoi davvero uscire dall'applicazione?"):
+            attivita = self.attivita_in_corso()
+            if attivita:
+                dettaglio = f"Sono ancora in corso: {self._testo_attivita(attivita)}. Uscendo verranno interrotti."
+                if any("audiolibr" in voce for voce in attivita):
+                    dettaglio = f"{dettaglio} I download degli audiolibri riprendono al prossimo avvio."
+                confermato = self.chiedi_conferma("Ci sono operazioni in corso. Uscire comunque?", dettaglio, False)
+            else:
+                confermato = self.chiedi_conferma("Vuoi davvero uscire dall'applicazione?")
+            if confermato:
+                self._uscita_confermata = True
                 self.close()
         except Exception as ex:
             scrivi_log("MainWindow.confirm_exit", ex)
+
+    def _alla_chiusura(self, widget, evento):
+        try:
+            if self._uscita_confermata:
+                return False
+            self.confirm_exit()
+            return True
+        except Exception as ex:
+            scrivi_log("MainWindow._alla_chiusura", ex)
+            return False

@@ -99,11 +99,11 @@ class RubricaView:
                 ("Ricerche recenti", self.apri_ricerche, None),
                 (TITOLO_PREFERITI, self.apri_preferiti, None),
                 (TITOLO_RECENTI, self.apri_recenti, None),
-                ("Aggiungi un contatto", self.aggiungi, None),
+                ("Nuovo contatto", self.aggiungi, None),
             ]
         except Exception as ex:
             scrivi_log("RubricaView.get_menu_items", ex)
-            return [("Aggiungi un contatto", self.aggiungi, None)]
+            return [("Nuovo contatto", self.aggiungi, None)]
 
     def _etichetta(self, contatto):
         try:
@@ -157,10 +157,10 @@ class RubricaView:
                 azioni.append(("Aggiungi ai preferiti", partial(self.imposta_preferito, identificativo, True), None))
             azioni.append(("Modifica il contatto", partial(self.modifica, identificativo), None))
             if recenti:
-                azioni.append(("Rimuovi dai contatti recenti", partial(self.store.rimuovi_da_recenti, identificativo), None))
+                azioni.append(("Rimuovi dai contatti recenti", partial(self.rimuovi_recente, identificativo), None))
                 azioni.append(("Svuota i contatti recenti", self.svuota_recenti, None))
             azioni.append(("Elimina il contatto", partial(self.elimina, identificativo), None))
-            azioni.append(("Aggiungi un contatto", self.aggiungi, None))
+            azioni.append(("Nuovo contatto", self.aggiungi, None))
             return azioni
         except Exception as ex:
             scrivi_log(f"RubricaView._azioni_contatto ({identificativo})", ex)
@@ -170,7 +170,7 @@ class RubricaView:
         try:
             totale = self.store.numero()
             if totale == 0:
-                if self.finestra.chiedi_conferma("La rubrica è vuota. Aggiungere un contatto?"):
+                if self.finestra.chiedi_conferma("La rubrica è vuota. Creare un nuovo contatto?"):
                     self.aggiungi()
                 return
             if totale <= SOGLIA_INIZIALI:
@@ -236,7 +236,7 @@ class RubricaView:
                         partial(self.esegui_ricerca, testo),
                         [
                             ("Cerca di nuovo", partial(self.esegui_ricerca, testo), None),
-                            ("Rimuovi dalle ricerche recenti", partial(self.store.rimuovi_ricerca, testo), None),
+                            ("Rimuovi dalle ricerche recenti", partial(self.rimuovi_ricerca, testo), None),
                             ("Svuota le ricerche recenti", self.svuota_ricerche, None),
                         ],
                     )
@@ -245,10 +245,23 @@ class RubricaView:
             scrivi_log("RubricaView._voci_ricerche", ex)
         return voci
 
+    def rimuovi_ricerca(self, testo):
+        try:
+            if self.store.rimuovi_ricerca(testo):
+                self.finestra.mostra_stato("Ricerca rimossa dalle recenti.")
+            else:
+                self.finestra.mostra_messaggio("Impossibile rimuovere la ricerca.", ERRORE_LOG)
+        except Exception as ex:
+            scrivi_log(f"RubricaView.rimuovi_ricerca ({testo})", ex)
+
     def svuota_ricerche(self):
         try:
-            if self.finestra.chiedi_conferma("Svuotare le ricerche recenti della rubrica?"):
-                self.store.svuota_ricerche()
+            if not self.finestra.chiedi_conferma("Svuotare le ricerche recenti della rubrica?"):
+                return
+            if self.store.svuota_ricerche():
+                self.finestra.mostra_stato("Ricerche recenti svuotate.")
+            else:
+                self.finestra.mostra_messaggio("Impossibile svuotare le ricerche recenti.", ERRORE_LOG)
         except Exception as ex:
             scrivi_log("RubricaView.svuota_ricerche", ex)
 
@@ -268,10 +281,23 @@ class RubricaView:
         except Exception as ex:
             scrivi_log("RubricaView.apri_recenti", ex)
 
+    def rimuovi_recente(self, identificativo):
+        try:
+            if self.store.rimuovi_da_recenti(identificativo):
+                self.finestra.mostra_stato("Contatto rimosso dai recenti.")
+            else:
+                self.finestra.mostra_messaggio("Impossibile rimuovere il contatto dai recenti.", ERRORE_LOG)
+        except Exception as ex:
+            scrivi_log(f"RubricaView.rimuovi_recente ({identificativo})", ex)
+
     def svuota_recenti(self):
         try:
-            if self.finestra.chiedi_conferma("Svuotare l'elenco dei contatti recenti?"):
-                self.store.svuota_recenti()
+            if not self.finestra.chiedi_conferma("Svuotare l'elenco dei contatti recenti?"):
+                return
+            if self.store.svuota_recenti():
+                self.finestra.mostra_stato("Elenco dei contatti recenti svuotato.")
+            else:
+                self.finestra.mostra_messaggio("Impossibile svuotare l'elenco dei contatti recenti.", ERRORE_LOG)
         except Exception as ex:
             scrivi_log("RubricaView.svuota_recenti", ex)
 

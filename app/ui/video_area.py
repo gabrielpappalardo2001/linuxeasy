@@ -92,7 +92,7 @@ class _RisolutoreOpenGL:
                     if valore:
                         return int(ctypes.cast(valore, ctypes.c_void_p).value or 0)
                 except Exception as ex:
-                    scrivi_log(f"video_area: eglGetProcAddress di PyOpenGL non riuscito ({etichetta})", ex)
+                    scrivi_log(f"video_area: eglGetProcAddress di PyOpenGL non riuscito ({etichetta})", ex, conta=False)
             return 0
         except Exception as ex:
             scrivi_log("video_area._RisolutoreOpenGL.indirizzo", ex)
@@ -155,7 +155,7 @@ class AreaVideo(Gtk.GLArea):
                     self.realize()
                     self.make_current()
                 except Exception as ex:
-                    scrivi_log("AreaVideo.crea_contesto: secondo tentativo con OpenGL ES", ex)
+                    scrivi_log("AreaVideo.crea_contesto: secondo tentativo con OpenGL ES", ex, conta=False)
             errore = self.get_error()
             if errore is not None:
                 scrivi_log("AreaVideo.crea_contesto", RuntimeError(f"OpenGL non disponibile: {errore.message}"))

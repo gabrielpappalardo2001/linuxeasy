@@ -122,14 +122,14 @@ class WikipediaView:
             azioni = [
                 ("Apri la pagina", partial(self.apri_pagina, titolo, descrizione), None),
                 ("Leggi la pagina intera", partial(self._apri_e_esegui, titolo, descrizione, self.leggi_intera), None),
-                ("Consulta l'indice", partial(self._apri_e_esegui, titolo, descrizione, self.apri_indice), None),
+                ("Leggi per parti", partial(self._apri_e_esegui, titolo, descrizione, self.apri_indice), None),
             ]
             if self.libreria.preferita(titolo, lingua):
                 azioni.append(("Rimuovi dalle pagine preferite", partial(self.rimuovi_preferita, titolo), None))
             else:
                 azioni.append(("Aggiungi alle pagine preferite", partial(self.aggiungi_preferita, titolo, descrizione), None))
             if elenco == TITOLO_RECENTI:
-                azioni.append(("Rimuovi dalle pagine recenti", partial(self.libreria.rimuovi_recente, titolo, lingua), None))
+                azioni.append(("Rimuovi dalle pagine recenti", partial(self.rimuovi_recente, titolo), None))
                 azioni.append(("Svuota le pagine recenti", self.svuota_recenti, None))
             azioni.append(("Apri la pagina nel browser", partial(self._apri_browser, titolo), None))
             return azioni
@@ -226,21 +226,36 @@ class WikipediaView:
             scrivi_log("WikipediaView._pagina_caricata", ex)
             return []
 
-    def _voci_pagina(self, pagina):
+    def _azioni_pagina(self, pagina):
         try:
-            voci = [
-                (f"Leggi la pagina intera, {conta(pagina.numero_parole(), 'parola', 'parole')}", partial(self.leggi_intera, pagina), None)
-            ]
-            if pagina.sezioni:
-                voci.append((f"Indice, {conta(len(pagina.sezioni), 'parte', 'parti')}", partial(self.apri_indice, pagina), None))
+            azioni = []
             if self.libreria.preferita(pagina.title, pagina.lingua):
-                voci.append(("Rimuovi dalle pagine preferite", partial(self.rimuovi_preferita, pagina.title), None))
+                azioni.append(("Rimuovi dalle pagine preferite", partial(self.rimuovi_preferita, pagina.title), None))
             else:
-                voci.append(
+                azioni.append(
                     ("Aggiungi alle pagine preferite", partial(self.aggiungi_preferita, pagina.title, pagina.description), None)
                 )
-            voci.append(("Salva la pagina intera in un file di testo", partial(self.salva, pagina, None), None))
-            voci.append(("Apri la pagina nel browser", partial(self._apri_browser, pagina.title, pagina.url), None))
+            azioni.append(("Salva la pagina intera in un file di testo", partial(self.salva, pagina, None), None))
+            azioni.append(("Apri la pagina nel browser", partial(self._apri_browser, pagina.title, pagina.url), None))
+            return azioni
+        except Exception as ex:
+            scrivi_log("WikipediaView._azioni_pagina", ex)
+            return []
+
+    def _voci_pagina(self, pagina):
+        try:
+            azioni = partial(self._azioni_pagina, pagina)
+            voci = [
+                (
+                    f"Leggi la pagina intera, {conta(pagina.numero_parole(), 'parola', 'parole')}",
+                    partial(self.leggi_intera, pagina),
+                    azioni,
+                )
+            ]
+            if pagina.sezioni:
+                voci.append(
+                    (f"Leggi per parti, {conta(len(pagina.sezioni), 'parte', 'parti')}", partial(self.apri_indice, pagina), azioni)
+                )
             return voci
         except Exception as ex:
             scrivi_log("WikipediaView._voci_pagina", ex)
@@ -255,7 +270,7 @@ class WikipediaView:
             scrivi_log("WikipediaView.leggi_intera", ex)
 
     def _titolo_indice(self, pagina):
-        return f"Indice di {pagina.title}"
+        return f"Parti di {pagina.title}"
 
     def apri_indice(self, pagina):
         try:
@@ -334,7 +349,7 @@ class WikipediaView:
             if indice is None:
                 azioni = [("Salva la pagina intera in un file di testo", partial(self.salva, pagina, None), None)]
                 if pagina.sezioni:
-                    azioni.append(("Consulta l'indice", partial(self._passa_a_indice, pagina, None), None))
+                    azioni.append(("Leggi per parti", partial(self._passa_a_indice, pagina, None), None))
             else:
                 azioni = [
                     ("Salva questa parte in un file di testo", partial(self.salva, pagina, indice), None),
@@ -358,7 +373,7 @@ class WikipediaView:
                             None,
                         )
                     )
-                azioni.append(("Torna all'indice", partial(self._passa_a_indice, pagina, indice), None))
+                azioni.append(("Torna all'elenco delle parti", partial(self._passa_a_indice, pagina, indice), None))
                 azioni.append(("Leggi la pagina intera", partial(self._passa_a_pagina_intera, pagina), None))
             if self.libreria.preferita(pagina.title, pagina.lingua):
                 azioni.append(("Rimuovi dalle pagine preferite", partial(self.rimuovi_preferita, pagina.title), None))
@@ -442,10 +457,23 @@ class WikipediaView:
         except Exception as ex:
             scrivi_log("WikipediaView.apri_recenti", ex)
 
+    def rimuovi_recente(self, titolo):
+        try:
+            if self.libreria.rimuovi_recente(titolo, self.client.lingua):
+                self.finestra.mostra_stato("Pagina rimossa dalle recenti.")
+            else:
+                self.finestra.mostra_messaggio("Impossibile rimuovere la pagina dalle recenti.", ERRORE_LOG)
+        except Exception as ex:
+            scrivi_log(f"WikipediaView.rimuovi_recente ({titolo})", ex)
+
     def svuota_recenti(self):
         try:
-            if self.finestra.chiedi_conferma("Svuotare l'elenco delle pagine recenti di Wikipedia?"):
-                self.libreria.svuota_recenti()
+            if not self.finestra.chiedi_conferma("Svuotare l'elenco delle pagine recenti di Wikipedia?"):
+                return
+            if self.libreria.svuota_recenti():
+                self.finestra.mostra_stato("Elenco delle pagine recenti svuotato.")
+            else:
+                self.finestra.mostra_messaggio("Impossibile svuotare l'elenco delle pagine recenti.", ERRORE_LOG)
         except Exception as ex:
             scrivi_log("WikipediaView.svuota_recenti", ex)
 
@@ -465,7 +493,7 @@ class WikipediaView:
                         partial(self.esegui_ricerca, testo),
                         [
                             ("Cerca di nuovo", partial(self.esegui_ricerca, testo), None),
-                            ("Rimuovi dalle ricerche recenti", partial(self.libreria.rimuovi_ricerca, testo), None),
+                            ("Rimuovi dalle ricerche recenti", partial(self.rimuovi_ricerca, testo), None),
                             ("Svuota le ricerche recenti", self.svuota_ricerche, None),
                         ],
                     )
@@ -474,9 +502,22 @@ class WikipediaView:
             scrivi_log("WikipediaView._voci_ricerche", ex)
         return voci
 
+    def rimuovi_ricerca(self, testo):
+        try:
+            if self.libreria.rimuovi_ricerca(testo):
+                self.finestra.mostra_stato("Ricerca rimossa dalle recenti.")
+            else:
+                self.finestra.mostra_messaggio("Impossibile rimuovere la ricerca.", ERRORE_LOG)
+        except Exception as ex:
+            scrivi_log(f"WikipediaView.rimuovi_ricerca ({testo})", ex)
+
     def svuota_ricerche(self):
         try:
-            if self.finestra.chiedi_conferma("Svuotare le ricerche recenti di Wikipedia?"):
-                self.libreria.svuota_ricerche()
+            if not self.finestra.chiedi_conferma("Svuotare le ricerche recenti di Wikipedia?"):
+                return
+            if self.libreria.svuota_ricerche():
+                self.finestra.mostra_stato("Ricerche recenti svuotate.")
+            else:
+                self.finestra.mostra_messaggio("Impossibile svuotare le ricerche recenti.", ERRORE_LOG)
         except Exception as ex:
             scrivi_log("WikipediaView.svuota_ricerche", ex)

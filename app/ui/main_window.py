@@ -29,6 +29,7 @@ from app.core.database import Database
 from app.core.gestore_file import GestoreFile
 from app.core.impostazioni import Impostazioni
 from app.core.mpv_engine import MPVEngine, assicura_configurazione_globale
+from app.core.sincronizzazione import Sincronizzazione
 from app.librivox.librivox_catalog import LibriVoxCatalog
 from app.librivox.librivox_downloads import LibriVoxDownloads
 from app.librivox.librivox_library import LibriVoxLibrary
@@ -160,6 +161,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.youtube_view = None
         self.settings_view = None
         self.control_center_view = None
+        self.sincronizzazione = None
         try:
             self.set_default_size(900, 600)
             self._crea_servizi()
@@ -303,9 +305,18 @@ class MainWindow(Gtk.ApplicationWindow):
                     "vista YouTube",
                     lambda: YouTubeView(self, self.engine, self.youtube_library, self.youtube_search),
                 )
+            if self.db is not None:
+                self.sincronizzazione = self._crea(
+                    "sincronizzazione tra computer",
+                    lambda: Sincronizzazione(
+                        self.db,
+                        self.impostazioni,
+                        self.radio_manager.client if self.radio_manager is not None else None,
+                    ),
+                )
             self.settings_view = self._crea(
                 "vista impostazioni",
-                lambda: SettingsView(self, self.impostazioni, self.engine),
+                lambda: SettingsView(self, self.impostazioni, self.engine, self.sincronizzazione),
             )
             self.control_center_view = self._crea(
                 "centro di controllo",
@@ -398,8 +409,20 @@ class MainWindow(Gtk.ApplicationWindow):
                 self.librivox_downloads.avvia()
             if self.agenda_notifier is not None:
                 self.agenda_notifier.avvia()
+            if self.sincronizzazione is not None:
+                self.sincronizzazione.avvia(self._sincronizzazione_terminata)
         except Exception as ex:
             scrivi_log("MainWindow._avvia_servizi", ex)
+
+    def _sincronizzazione_terminata(self, esito):
+        try:
+            if esito is None or not esito.dati_ricevuti:
+                return
+            if self.agenda_store is not None:
+                self.agenda_store._notifica_cambiamento()
+            self.ricarica_menu_corrente(annuncia_vuoto=False)
+        except Exception as ex:
+            scrivi_log("MainWindow._sincronizzazione_terminata", ex)
 
     def _alla_distruzione(self, widget):
         try:
@@ -418,6 +441,8 @@ class MainWindow(Gtk.ApplicationWindow):
                 self.librivox_catalog.ferma()
             if self.agenda_notifier is not None:
                 self.agenda_notifier.ferma()
+            if self.sincronizzazione is not None:
+                self.sincronizzazione.sincronizza_alla_chiusura()
             if self.area_video is not None:
                 self.area_video.scollega()
             if self.engine is not None:
@@ -1738,6 +1763,8 @@ class MainWindow(Gtk.ApplicationWindow):
                 totale = len(self.podcast_downloads.in_corso())
                 if totale:
                     elenco.append(f"{totale} download di episodi" if totale > 1 else "1 download di episodio")
+            if self.sincronizzazione is not None and self.sincronizzazione.in_corso():
+                elenco.append("la sincronizzazione tra computer")
         except Exception as ex:
             scrivi_log("MainWindow.attivita_in_corso", ex)
         return elenco

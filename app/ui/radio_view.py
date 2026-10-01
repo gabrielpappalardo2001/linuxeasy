@@ -123,7 +123,7 @@ class RadioView:
             if self.engine is None or self.engine.play(url, nome, kind="stream") is False:
                 self.finestra.mostra_messaggio("Impossibile avviare la riproduzione.", "Verificare che mpv sia installato.")
                 return
-            self.manager.add_recent({"name": nome, "url": url})
+            self.manager.add_recent({"name": nome, "url": url, "uuid": stazione.get("uuid", "")})
             self.finestra.mostra_stato(f"In riproduzione: {nome}")
             uuid = stazione.get("uuid", "")
             if uuid:
@@ -135,7 +135,7 @@ class RadioView:
 
     def aggiungi_preferita(self, stazione):
         try:
-            if self.manager.add_favorite({"name": stazione.get("name", ""), "url": stazione.get("url", "")}):
+            if self.manager.add_favorite({"name": stazione.get("name", ""), "url": stazione.get("url", ""), "uuid": stazione.get("uuid", "")}):
                 self.finestra.mostra_stato("Radio aggiunta alle preferite.")
             else:
                 self.finestra.mostra_messaggio("Impossibile aggiungere la radio alle preferite.", ERRORE_LOG)

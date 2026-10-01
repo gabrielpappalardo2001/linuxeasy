@@ -27,15 +27,18 @@ CARATTERI_DA_RACCHIUDERE = set(" \t\n\"'\\><~|&;$*?#()`")
 TITOLO_NOTIFICHE = "Impostazioni notifiche"
 TITOLO_RIPRODUZIONE = "Impostazioni riproduzione"
 TITOLO_SISTEMA = "Impostazioni di sistema"
+TITOLO_SINCRONIZZAZIONE = "Sincronizzazione tra computer"
+TITOLO_DESTINAZIONE = "Destinazione dei dati"
 MESSAGGIO_NON_DISPONIBILI = "Le impostazioni non sono disponibili."
 MESSAGGIO_DETTAGLI_LOG = "I dettagli sono nel file di log."
 
 
 class SettingsView:
-    def __init__(self, finestra, impostazioni, engine=None):
+    def __init__(self, finestra, impostazioni, engine=None, sincronizzazione=None):
         self.finestra = finestra
         self.impostazioni = impostazioni
         self.engine = engine
+        self.sincronizzazione = sincronizzazione
 
     def get_menu_items(self):
         try:
@@ -43,6 +46,7 @@ class SettingsView:
                 ("Notifiche", self.apri_notifiche, None),
                 ("Riproduzione", self.apri_riproduzione, None),
                 ("Sistema", self.apri_sistema, None),
+                (TITOLO_SINCRONIZZAZIONE, self.apri_sincronizzazione, None),
             ]
         except Exception as ex:
             scrivi_log("SettingsView.get_menu_items", ex)
@@ -65,6 +69,195 @@ class SettingsView:
             self.finestra.push_menu(TITOLO_SISTEMA, self._voci_sistema)
         except Exception as ex:
             scrivi_log("SettingsView.apri_sistema", ex)
+
+    def apri_sincronizzazione(self):
+        try:
+            if self.sincronizzazione is None:
+                self.finestra.mostra_messaggio("La sincronizzazione tra computer non è disponibile.", MESSAGGIO_DETTAGLI_LOG)
+                return
+            self.finestra.push_menu(TITOLO_SINCRONIZZAZIONE, self._voci_sincronizzazione)
+        except Exception as ex:
+            scrivi_log("SettingsView.apri_sincronizzazione", ex)
+
+    def _stato_sincronizzazione(self, attivo, femminile=False):
+        if femminile:
+            return "sincronizzate" if attivo else "non sincronizzate"
+        return "sincronizzata" if attivo else "non sincronizzata"
+
+    def _voci_sincronizzazione(self):
+        try:
+            sincronizzazione = self.sincronizzazione
+            return [
+                (f"Destinazione dei dati: {sincronizzazione.descrizione_destinazione()}", self.apri_destinazioni, None),
+                (f"Rubrica: {self._stato_sincronizzazione(sincronizzazione.rubrica_sincronizzata())}", self.alterna_sincronizzazione_rubrica, None),
+                (f"Agenda: {self._stato_sincronizzazione(sincronizzazione.agenda_sincronizzata())}", self.alterna_sincronizzazione_agenda, None),
+                (f"Radio preferite e recenti: {self._stato_sincronizzazione(sincronizzazione.radio_sincronizzate(), True)}", self.alterna_sincronizzazione_radio, None),
+                (f"Testate delle notizie: {self._stato_sincronizzazione(sincronizzazione.notizie_sincronizzate(), True)}", self.alterna_sincronizzazione_notizie, None),
+                ("Sincronizza adesso", self.sincronizza_adesso, None),
+                ("Informazioni sulla sincronizzazione", self.informazioni_sincronizzazione, None),
+            ]
+        except Exception as ex:
+            scrivi_log("SettingsView._voci_sincronizzazione", ex)
+            return []
+
+    def apri_destinazioni(self):
+        try:
+            self.finestra.push_menu(TITOLO_DESTINAZIONE, self._voci_destinazioni)
+        except Exception as ex:
+            scrivi_log("SettingsView.apri_destinazioni", ex)
+
+    def _voci_destinazioni(self):
+        voci = []
+        try:
+            onedrive = self.sincronizzazione.rileva_onedrive()
+            if onedrive is not None:
+                voci.append((f"OneDrive, {onedrive}", self.scegli_onedrive, None))
+            google, descrizione = self.sincronizzazione.rileva_google_drive()
+            if google is not None:
+                voci.append((f"Google Drive, {descrizione}", self.scegli_google_drive, None))
+            voci.append(("Scegli una cartella", self.scegli_cartella_sincronizzazione, None))
+            voci.append(("Nessuna sincronizzazione", self.disattiva_sincronizzazione, None))
+        except Exception as ex:
+            scrivi_log("SettingsView._voci_destinazioni", ex)
+        return voci
+
+    def _destinazione_impostata(self, riuscita, messaggio):
+        try:
+            self.finestra.go_back()
+            self._aggiorna_menu()
+            if not riuscita:
+                self.finestra.mostra_messaggio(messaggio)
+                return
+            nessuna_scelta = not (
+                self.sincronizzazione.rubrica_sincronizzata()
+                or self.sincronizzazione.agenda_sincronizzata()
+                or self.sincronizzazione.radio_sincronizzate()
+                or self.sincronizzazione.notizie_sincronizzate()
+            )
+            dettaglio = "Scegli ora nello stesso menu cosa sincronizzare: rubrica, agenda, radio e testate." if nessuna_scelta else ""
+            self.finestra.mostra_messaggio(messaggio, dettaglio)
+        except Exception as ex:
+            scrivi_log("SettingsView._destinazione_impostata", ex)
+
+    def scegli_onedrive(self):
+        try:
+            riuscita, messaggio = self.sincronizzazione.imposta_onedrive()
+            self._destinazione_impostata(riuscita, messaggio)
+        except Exception as ex:
+            scrivi_log("SettingsView.scegli_onedrive", ex)
+
+    def scegli_google_drive(self):
+        try:
+            riuscita, messaggio = self.sincronizzazione.imposta_google_drive()
+            self._destinazione_impostata(riuscita, messaggio)
+        except Exception as ex:
+            scrivi_log("SettingsView.scegli_google_drive", ex)
+
+    def scegli_cartella_sincronizzazione(self):
+        try:
+            selettore = getattr(self.finestra, "selettore_file", None)
+            if selettore is None:
+                self.finestra.mostra_messaggio("La scelta della cartella non è disponibile.", MESSAGGIO_DETTAGLI_LOG)
+                return
+            selettore.scegli_cartella(self._cartella_sincronizzazione_scelta, "Cartella di sincronizzazione:")
+        except Exception as ex:
+            scrivi_log("SettingsView.scegli_cartella_sincronizzazione", ex)
+
+    def _cartella_sincronizzazione_scelta(self, percorso):
+        try:
+            riuscita, messaggio = self.sincronizzazione.imposta_cartella(percorso)
+            self._destinazione_impostata(riuscita, messaggio)
+        except Exception as ex:
+            scrivi_log(f"SettingsView._cartella_sincronizzazione_scelta ({percorso})", ex)
+
+    def disattiva_sincronizzazione(self):
+        try:
+            riuscita = self.sincronizzazione.disattiva()
+            self.finestra.go_back()
+            self._aggiorna_menu()
+            if riuscita:
+                self.finestra.mostra_messaggio("Sincronizzazione tra computer disattivata. I dati restano su questo computer.")
+            else:
+                self.finestra.mostra_messaggio("Impossibile disattivare la sincronizzazione.", MESSAGGIO_DETTAGLI_LOG)
+        except Exception as ex:
+            scrivi_log("SettingsView.disattiva_sincronizzazione", ex)
+
+    def _alterna_sincronizzazione(self, attuale, imposta, descrizione, femminile=False):
+        try:
+            nuovo = not attuale
+            if not imposta(nuovo):
+                self.finestra.mostra_messaggio("Impossibile salvare l'impostazione.", MESSAGGIO_DETTAGLI_LOG)
+                return
+            self._aggiorna_menu()
+            stato = self._stato_sincronizzazione(nuovo, femminile)
+            if nuovo and not self.sincronizzazione.attiva():
+                self.finestra.mostra_messaggio(
+                    f"{descrizione}: {stato}.",
+                    "Scegli anche la destinazione dei dati, altrimenti la sincronizzazione non parte.",
+                )
+                return
+            self.finestra.mostra_stato(f"{descrizione}: {stato}.")
+        except Exception as ex:
+            scrivi_log(f"SettingsView._alterna_sincronizzazione ({descrizione})", ex)
+
+    def alterna_sincronizzazione_rubrica(self):
+        self._alterna_sincronizzazione(
+            self.sincronizzazione.rubrica_sincronizzata(), self.sincronizzazione.imposta_rubrica, "Rubrica"
+        )
+
+    def alterna_sincronizzazione_agenda(self):
+        self._alterna_sincronizzazione(
+            self.sincronizzazione.agenda_sincronizzata(), self.sincronizzazione.imposta_agenda, "Agenda"
+        )
+
+    def alterna_sincronizzazione_radio(self):
+        self._alterna_sincronizzazione(
+            self.sincronizzazione.radio_sincronizzate(), self.sincronizzazione.imposta_radio, "Radio preferite e recenti", True
+        )
+
+    def alterna_sincronizzazione_notizie(self):
+        self._alterna_sincronizzazione(
+            self.sincronizzazione.notizie_sincronizzate(), self.sincronizzazione.imposta_notizie, "Testate delle notizie", True
+        )
+
+    def sincronizza_adesso(self):
+        try:
+            if not self.sincronizzazione.attiva():
+                self.finestra.mostra_messaggio("Prima scegli la destinazione dei dati.")
+                return
+            if self.sincronizzazione.in_corso():
+                self.finestra.mostra_messaggio("È già in corso una sincronizzazione.", "Attendi che finisca.")
+                return
+            if not self.sincronizzazione.sincronizza_in_background(self._sincronizzazione_conclusa):
+                self.finestra.mostra_messaggio("Impossibile avviare la sincronizzazione.", MESSAGGIO_DETTAGLI_LOG)
+                return
+            self.finestra.mostra_stato("Sincronizzazione in corso.")
+        except Exception as ex:
+            scrivi_log("SettingsView.sincronizza_adesso", ex)
+
+    def _sincronizzazione_conclusa(self, esito):
+        try:
+            self._aggiorna_menu()
+            self.finestra.mostra_messaggio(esito.messaggio, " ".join(esito.avvisi))
+        except Exception as ex:
+            scrivi_log("SettingsView._sincronizzazione_conclusa", ex)
+
+    def informazioni_sincronizzazione(self):
+        try:
+            sincronizzazione = self.sincronizzazione
+            righe = [f"Destinazione dei dati: {sincronizzazione.descrizione_destinazione()}."]
+            percorso = sincronizzazione.percorso_file_leggibile()
+            if sincronizzazione.attiva() and percorso:
+                righe.append(f"File: {percorso}.")
+            righe.append(f"Rubrica: {self._stato_sincronizzazione(sincronizzazione.rubrica_sincronizzata())}.")
+            righe.append(f"Agenda: {self._stato_sincronizzazione(sincronizzazione.agenda_sincronizzata())}.")
+            righe.append(f"Radio preferite e recenti: {self._stato_sincronizzazione(sincronizzazione.radio_sincronizzate(), True)}.")
+            righe.append(f"Testate delle notizie: {self._stato_sincronizzazione(sincronizzazione.notizie_sincronizzate(), True)}.")
+            ultima = sincronizzazione.ultima_sincronizzazione()
+            righe.append(f"Ultima sincronizzazione: {ultima}." if ultima else "Nessuna sincronizzazione eseguita finora.")
+            self.finestra.mostra_messaggio(TITOLO_SINCRONIZZAZIONE, " ".join(righe))
+        except Exception as ex:
+            scrivi_log("SettingsView.informazioni_sincronizzazione", ex)
 
     def _stato_femminile(self, attivo):
         return "attive" if attivo else "disattivate"

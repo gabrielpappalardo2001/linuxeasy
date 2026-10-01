@@ -1,5 +1,6 @@
 import threading
 import time
+from datetime import datetime
 
 from app.core.database import Database
 from app.core.log import scrivi_log
@@ -8,6 +9,18 @@ from app.radio.radio_browser_client import ErroreRadio, RadioBrowserClient
 
 DURATA_CACHE = 1800
 LIMITE_CRONOLOGIA = 20
+LIMITE_RECENTI = 40
+SEZIONE_PREFERITI = "radioPreferiti"
+SEZIONE_RECENTI = "radioRecenti"
+
+
+def _ora_utc():
+    try:
+        adesso = datetime.utcnow()
+        return adesso.strftime("%Y-%m-%dT%H:%M:%S") + f".{adesso.microsecond // 1000:03d}Z"
+    except Exception as ex:
+        scrivi_log("stations._ora_utc", ex)
+        return "1970-01-01T00:00:00.000Z"
 
 
 class RadioManager:
@@ -149,10 +162,29 @@ class RadioManager:
             scrivi_log("RadioManager.clear_search_history", ex)
             return False
 
+    def _uuid_noto(self, station):
+        try:
+            if not isinstance(station, dict):
+                return ""
+            uuid = str(station.get("uuid") or "").strip()
+            if uuid:
+                return uuid
+            url = station.get("url") or ""
+            if not url:
+                return ""
+            for tabella in ("radio_favorites", "radio_recent"):
+                riga = self.db.leggi_uno(f"SELECT uuid FROM {tabella} WHERE url = ? AND uuid <> ''", (url,))
+                if riga is not None and riga[0]:
+                    return str(riga[0])
+            return ""
+        except Exception as ex:
+            scrivi_log("RadioManager._uuid_noto", ex)
+            return ""
+
     def get_favorites(self):
         try:
-            righe = self.db.leggi_tutti("SELECT name, url FROM radio_favorites ORDER BY name COLLATE NOCASE")
-            return [{"name": riga[0], "url": riga[1]} for riga in righe]
+            righe = self.db.leggi_tutti("SELECT name, url, uuid FROM radio_favorites ORDER BY name COLLATE NOCASE")
+            return [{"name": riga[0], "url": riga[1], "uuid": riga[2] or ""} for riga in righe]
         except Exception as ex:
             scrivi_log("RadioManager.get_favorites", ex)
             return []
@@ -172,7 +204,19 @@ class RadioManager:
             url = station.get("url") if isinstance(station, dict) else ""
             if not url or not nome:
                 return False
-            return self.db.esegui("INSERT OR IGNORE INTO radio_favorites (name, url) VALUES (?, ?)", (nome, url))
+            uuid = self._uuid_noto(station)
+            istruzioni = [
+                (
+                    "INSERT OR IGNORE INTO radio_favorites (name, url, uuid, sync_modificato) VALUES (?, ?, ?, ?)",
+                    (nome, url, uuid, _ora_utc()),
+                )
+            ]
+            if uuid:
+                istruzioni.append(("UPDATE radio_favorites SET uuid = ? WHERE url = ? AND uuid = ''", (uuid, url)))
+                istruzioni.append(
+                    ("DELETE FROM sync_eliminati WHERE sezione = ? AND sync_id = ?", (SEZIONE_PREFERITI, uuid))
+                )
+            return self.db.transazione(istruzioni)
         except Exception as ex:
             scrivi_log("RadioManager.add_favorite", ex)
             return False
@@ -182,7 +226,16 @@ class RadioManager:
             url = station.get("url") if isinstance(station, dict) else ""
             if not url:
                 return False
-            return self.db.esegui("DELETE FROM radio_favorites WHERE url = ?", (url,))
+            riga = self.db.leggi_uno("SELECT uuid FROM radio_favorites WHERE url = ?", (url,))
+            istruzioni = [("DELETE FROM radio_favorites WHERE url = ?", (url,))]
+            if riga is not None and riga[0]:
+                istruzioni.append(
+                    (
+                        "INSERT OR REPLACE INTO sync_eliminati (sezione, sync_id, data) VALUES (?, ?, ?)",
+                        (SEZIONE_PREFERITI, riga[0], _ora_utc()),
+                    )
+                )
+            return self.db.transazione(istruzioni)
         except Exception as ex:
             scrivi_log("RadioManager.remove_favorite", ex)
             return False
@@ -190,10 +243,10 @@ class RadioManager:
     def get_recent(self):
         try:
             righe = self.db.leggi_tutti(
-                "SELECT name, url FROM radio_recent ORDER BY id DESC LIMIT ?",
-                (LIMITE_CRONOLOGIA,),
+                "SELECT name, url, uuid FROM radio_recent ORDER BY sync_modificato DESC, id DESC LIMIT ?",
+                (LIMITE_RECENTI,),
             )
-            return [{"name": riga[0], "url": riga[1]} for riga in righe]
+            return [{"name": riga[0], "url": riga[1], "uuid": riga[2] or ""} for riga in righe]
         except Exception as ex:
             scrivi_log("RadioManager.get_recent", ex)
             return []
@@ -204,17 +257,24 @@ class RadioManager:
             url = station.get("url") if isinstance(station, dict) else ""
             if not url or not nome:
                 return False
-            return self.db.transazione(
-                [
-                    ("DELETE FROM radio_recent WHERE url = ?", (url,)),
-                    ("INSERT INTO radio_recent (name, url) VALUES (?, ?)", (nome, url)),
-                    (
-                        "DELETE FROM radio_recent WHERE id NOT IN "
-                        "(SELECT id FROM radio_recent ORDER BY id DESC LIMIT ?)",
-                        (LIMITE_CRONOLOGIA,),
-                    ),
-                ]
-            )
+            uuid = self._uuid_noto(station)
+            istruzioni = [
+                ("DELETE FROM radio_recent WHERE url = ?", (url,)),
+                (
+                    "INSERT INTO radio_recent (name, url, uuid, sync_modificato) VALUES (?, ?, ?, ?)",
+                    (nome, url, uuid, _ora_utc()),
+                ),
+                (
+                    "DELETE FROM radio_recent WHERE id NOT IN "
+                    "(SELECT id FROM radio_recent ORDER BY sync_modificato DESC, id DESC LIMIT ?)",
+                    (LIMITE_RECENTI,),
+                ),
+            ]
+            if uuid:
+                istruzioni.append(
+                    ("DELETE FROM sync_eliminati WHERE sezione = ? AND sync_id = ?", (SEZIONE_RECENTI, uuid))
+                )
+            return self.db.transazione(istruzioni)
         except Exception as ex:
             scrivi_log("RadioManager.add_recent", ex)
             return False
@@ -224,14 +284,32 @@ class RadioManager:
             url = station.get("url") if isinstance(station, dict) else ""
             if not url:
                 return False
-            return self.db.esegui("DELETE FROM radio_recent WHERE url = ?", (url,))
+            riga = self.db.leggi_uno("SELECT uuid FROM radio_recent WHERE url = ?", (url,))
+            istruzioni = [("DELETE FROM radio_recent WHERE url = ?", (url,))]
+            if riga is not None and riga[0]:
+                istruzioni.append(
+                    (
+                        "INSERT OR REPLACE INTO sync_eliminati (sezione, sync_id, data) VALUES (?, ?, ?)",
+                        (SEZIONE_RECENTI, riga[0], _ora_utc()),
+                    )
+                )
+            return self.db.transazione(istruzioni)
         except Exception as ex:
             scrivi_log("RadioManager.remove_recent", ex)
             return False
 
     def clear_recent(self):
         try:
-            return self.db.esegui("DELETE FROM radio_recent")
+            return self.db.transazione(
+                [
+                    (
+                        "INSERT OR REPLACE INTO sync_eliminati (sezione, sync_id, data) "
+                        "SELECT ?, uuid, ? FROM radio_recent WHERE uuid <> ''",
+                        (SEZIONE_RECENTI, _ora_utc()),
+                    ),
+                    ("DELETE FROM radio_recent", ()),
+                ]
+            )
         except Exception as ex:
             scrivi_log("RadioManager.clear_recent", ex)
             return False

@@ -381,6 +381,87 @@ SCHEMA = [
 
 CATEGORIE_NOTIZIE_PREDEFINITE = ["Generale", "Tecnologia", "Cronaca", "Sport", "Cultura"]
 
+ORA_SINCRONIZZAZIONE = "strftime('%Y-%m-%dT%H:%M:%fZ','now')"
+
+COLONNE_SINCRONIZZAZIONE = {
+    "contacts": [("sync_id", "TEXT"), ("sync_modificato", "TEXT"), ("sync_extra", "TEXT NOT NULL DEFAULT ''")],
+    "agenda_events": [("sync_id", "TEXT"), ("sync_modificato", "TEXT"), ("sync_extra", "TEXT NOT NULL DEFAULT ''")],
+    "news_categories": [("sync_id", "TEXT"), ("sync_modificato", "TEXT"), ("sync_extra", "TEXT NOT NULL DEFAULT ''")],
+    "news_sources": [("sync_id", "TEXT"), ("sync_modificato", "TEXT"), ("sync_extra", "TEXT NOT NULL DEFAULT ''")],
+    "radio_favorites": [("uuid", "TEXT NOT NULL DEFAULT ''"), ("sync_modificato", "TEXT NOT NULL DEFAULT ''")],
+    "radio_recent": [("uuid", "TEXT NOT NULL DEFAULT ''"), ("sync_modificato", "TEXT NOT NULL DEFAULT ''")],
+}
+
+ISTRUZIONI_SINCRONIZZAZIONE = [
+    "CREATE TABLE IF NOT EXISTS sync_eliminati (sezione TEXT NOT NULL, sync_id TEXT NOT NULL, data TEXT NOT NULL, "
+    "PRIMARY KEY (sezione, sync_id))",
+    "UPDATE contacts SET sync_id = lower(hex(randomblob(16))) WHERE sync_id IS NULL OR sync_id = ''",
+    f"UPDATE contacts SET sync_modificato = {ORA_SINCRONIZZAZIONE} WHERE sync_modificato IS NULL OR sync_modificato = ''",
+    "UPDATE agenda_events SET sync_id = lower(hex(randomblob(16))) WHERE sync_id IS NULL OR sync_id = ''",
+    f"UPDATE agenda_events SET sync_modificato = {ORA_SINCRONIZZAZIONE} WHERE sync_modificato IS NULL OR sync_modificato = ''",
+    "UPDATE news_categories SET sync_id = lower(hex(randomblob(16))) WHERE sync_id IS NULL OR sync_id = ''",
+    f"UPDATE news_categories SET sync_modificato = {ORA_SINCRONIZZAZIONE} WHERE sync_modificato IS NULL OR sync_modificato = ''",
+    f"UPDATE news_sources SET sync_modificato = {ORA_SINCRONIZZAZIONE} WHERE sync_modificato IS NULL OR sync_modificato = ''",
+    f"UPDATE radio_favorites SET sync_modificato = {ORA_SINCRONIZZAZIONE} WHERE sync_modificato IS NULL OR sync_modificato = ''",
+    f"UPDATE radio_recent SET sync_modificato = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-' || (SELECT COUNT(*) FROM radio_recent r WHERE r.id > radio_recent.id) || ' seconds') "
+    "WHERE sync_modificato IS NULL OR sync_modificato = ''",
+    "CREATE INDEX IF NOT EXISTS contacts_sync_id ON contacts (sync_id)",
+    "CREATE INDEX IF NOT EXISTS agenda_events_sync_id ON agenda_events (sync_id)",
+    "CREATE INDEX IF NOT EXISTS news_sources_sync_id ON news_sources (sync_id)",
+    "CREATE INDEX IF NOT EXISTS radio_favorites_uuid ON radio_favorites (uuid)",
+    "CREATE INDEX IF NOT EXISTS radio_recent_uuid ON radio_recent (uuid)",
+    "CREATE TRIGGER IF NOT EXISTS contacts_sync_ins AFTER INSERT ON contacts "
+    "WHEN NEW.sync_id IS NULL OR NEW.sync_id = '' OR NEW.sync_modificato IS NULL OR NEW.sync_modificato = '' BEGIN "
+    "UPDATE contacts SET "
+    "sync_id = CASE WHEN NEW.sync_id IS NULL OR NEW.sync_id = '' THEN lower(hex(randomblob(16))) ELSE NEW.sync_id END, "
+    f"sync_modificato = CASE WHEN NEW.sync_modificato IS NULL OR NEW.sync_modificato = '' THEN {ORA_SINCRONIZZAZIONE} ELSE NEW.sync_modificato END "
+    "WHERE id = NEW.id; END",
+    "CREATE TRIGGER IF NOT EXISTS contacts_sync_upd AFTER UPDATE OF first_name, last_name, company, birthday, notes, favorite "
+    "ON contacts WHEN NEW.sync_modificato IS OLD.sync_modificato BEGIN "
+    f"UPDATE contacts SET sync_modificato = {ORA_SINCRONIZZAZIONE} WHERE id = NEW.id; END",
+    "CREATE TRIGGER IF NOT EXISTS contacts_sync_del AFTER DELETE ON contacts "
+    "WHEN OLD.sync_id IS NOT NULL AND OLD.sync_id <> '' BEGIN "
+    f"INSERT OR REPLACE INTO sync_eliminati (sezione, sync_id, data) VALUES ('contatti', OLD.sync_id, {ORA_SINCRONIZZAZIONE}); END",
+    "CREATE TRIGGER IF NOT EXISTS contact_values_sync_ins AFTER INSERT ON contact_values BEGIN "
+    f"UPDATE contacts SET sync_modificato = {ORA_SINCRONIZZAZIONE} WHERE id = NEW.contact_id; END",
+    "CREATE TRIGGER IF NOT EXISTS contact_values_sync_del AFTER DELETE ON contact_values BEGIN "
+    f"UPDATE contacts SET sync_modificato = {ORA_SINCRONIZZAZIONE} WHERE id = OLD.contact_id; END",
+    "CREATE TRIGGER IF NOT EXISTS agenda_events_sync_ins AFTER INSERT ON agenda_events "
+    "WHEN NEW.sync_id IS NULL OR NEW.sync_id = '' OR NEW.sync_modificato IS NULL OR NEW.sync_modificato = '' BEGIN "
+    "UPDATE agenda_events SET "
+    "sync_id = CASE WHEN NEW.sync_id IS NULL OR NEW.sync_id = '' THEN lower(hex(randomblob(16))) ELSE NEW.sync_id END, "
+    f"sync_modificato = CASE WHEN NEW.sync_modificato IS NULL OR NEW.sync_modificato = '' THEN {ORA_SINCRONIZZAZIONE} ELSE NEW.sync_modificato END "
+    "WHERE id = NEW.id; END",
+    "CREATE TRIGGER IF NOT EXISTS agenda_events_sync_upd AFTER UPDATE OF title, location, notes, start, end, all_day, freq, "
+    "interval, weekdays, end_mode, until, count, reminder, exclusions ON agenda_events "
+    "WHEN NEW.sync_modificato IS OLD.sync_modificato BEGIN "
+    f"UPDATE agenda_events SET sync_modificato = {ORA_SINCRONIZZAZIONE} WHERE id = NEW.id; END",
+    "CREATE TRIGGER IF NOT EXISTS agenda_events_sync_del AFTER DELETE ON agenda_events "
+    "WHEN OLD.sync_id IS NOT NULL AND OLD.sync_id <> '' BEGIN "
+    f"INSERT OR REPLACE INTO sync_eliminati (sezione, sync_id, data) VALUES ('appuntamenti', OLD.sync_id, {ORA_SINCRONIZZAZIONE}); END",
+    "CREATE TRIGGER IF NOT EXISTS news_categories_sync_ins AFTER INSERT ON news_categories "
+    "WHEN NEW.sync_id IS NULL OR NEW.sync_id = '' OR NEW.sync_modificato IS NULL OR NEW.sync_modificato = '' BEGIN "
+    "UPDATE news_categories SET "
+    "sync_id = CASE WHEN NEW.sync_id IS NULL OR NEW.sync_id = '' THEN lower(hex(randomblob(16))) ELSE NEW.sync_id END, "
+    f"sync_modificato = CASE WHEN NEW.sync_modificato IS NULL OR NEW.sync_modificato = '' THEN {ORA_SINCRONIZZAZIONE} ELSE NEW.sync_modificato END "
+    "WHERE id = NEW.id; END",
+    "CREATE TRIGGER IF NOT EXISTS news_categories_sync_upd AFTER UPDATE OF name ON news_categories "
+    "WHEN NEW.sync_modificato IS OLD.sync_modificato BEGIN "
+    f"UPDATE news_categories SET sync_modificato = {ORA_SINCRONIZZAZIONE} WHERE id = NEW.id; END",
+    "CREATE TRIGGER IF NOT EXISTS news_categories_sync_del AFTER DELETE ON news_categories "
+    "WHEN OLD.sync_id IS NOT NULL AND OLD.sync_id <> '' BEGIN "
+    f"INSERT OR REPLACE INTO sync_eliminati (sezione, sync_id, data) VALUES ('categorieTestate', OLD.sync_id, {ORA_SINCRONIZZAZIONE}); END",
+    "CREATE TRIGGER IF NOT EXISTS news_sources_sync_ins AFTER INSERT ON news_sources "
+    "WHEN NEW.sync_modificato IS NULL OR NEW.sync_modificato = '' BEGIN "
+    f"UPDATE news_sources SET sync_modificato = {ORA_SINCRONIZZAZIONE} WHERE rowid = NEW.rowid; END",
+    "CREATE TRIGGER IF NOT EXISTS news_sources_sync_upd AFTER UPDATE OF name, url, site_url, kind, category_id ON news_sources "
+    "WHEN NEW.sync_modificato IS OLD.sync_modificato BEGIN "
+    f"UPDATE news_sources SET sync_modificato = {ORA_SINCRONIZZAZIONE} WHERE rowid = NEW.rowid; END",
+    "CREATE TRIGGER IF NOT EXISTS news_sources_sync_del AFTER DELETE ON news_sources "
+    "WHEN OLD.sync_id IS NOT NULL AND OLD.sync_id <> '' BEGIN "
+    f"INSERT OR REPLACE INTO sync_eliminati (sezione, sync_id, data) VALUES ('testate', OLD.sync_id, {ORA_SINCRONIZZAZIONE}); END",
+]
+
 COLONNE_FONTI_AGGIUNTE = [
     ("site_url", "TEXT NOT NULL DEFAULT ''"),
     ("kind", "TEXT NOT NULL DEFAULT 'rss'"),
@@ -421,6 +502,7 @@ class Database:
                     for istruzione in SCHEMA:
                         conn.execute(istruzione)
             self._migra_notizie()
+            self._migra_sincronizzazione()
             return True
         except Exception as ex:
             scrivi_log("Database.init_db", ex)
@@ -464,6 +546,22 @@ class Database:
             return True
         except Exception as ex:
             scrivi_log("Database._migra_notizie", ex)
+            return False
+
+    def _migra_sincronizzazione(self):
+        try:
+            with closing(self.get_connection()) as conn:
+                with conn:
+                    for tabella, colonne in COLONNE_SINCRONIZZAZIONE.items():
+                        presenti = {riga[1] for riga in conn.execute(f"PRAGMA table_info({tabella})").fetchall()}
+                        for nome, definizione in colonne:
+                            if nome not in presenti:
+                                conn.execute(f"ALTER TABLE {tabella} ADD COLUMN {nome} {definizione}")
+                    for istruzione in ISTRUZIONI_SINCRONIZZAZIONE:
+                        conn.execute(istruzione)
+            return True
+        except Exception as ex:
+            scrivi_log("Database._migra_sincronizzazione", ex)
             return False
 
     def esegui(self, sql, parametri=()):

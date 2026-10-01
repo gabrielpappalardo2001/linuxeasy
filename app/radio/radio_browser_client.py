@@ -169,6 +169,42 @@ class RadioBrowserClient:
             scrivi_log(f"RadioBrowserClient.search_stations ({name})", ex)
             return []
 
+    def indirizzi_per_uuid(self, identificativi):
+        risultato = {}
+        try:
+            elenco = [str(valore).strip() for valore in identificativi or [] if str(valore or "").strip()]
+            for inizio in range(0, len(elenco), 50):
+                blocco = elenco[inizio:inizio + 50]
+                try:
+                    dati = self._richiesta("/json/stations/byuuid", {"uuids": ",".join(blocco)})
+                    for elemento in dati or []:
+                        uuid = str(elemento.get("stationuuid") or "").strip()
+                        url = str(elemento.get("url_resolved") or elemento.get("url") or "").strip()
+                        if uuid and url:
+                            risultato[uuid] = url
+                except ErroreRadio as exBlocco:
+                    scrivi_log("RadioBrowserClient.indirizzi_per_uuid blocco", exBlocco)
+        except Exception as ex:
+            scrivi_log("RadioBrowserClient.indirizzi_per_uuid", ex)
+        return risultato
+
+    def uuid_per_indirizzo(self, url):
+        try:
+            indirizzo = str(url or "").strip()
+            if not indirizzo:
+                return ""
+            dati = self._richiesta("/json/stations/byurl", {"url": indirizzo})
+            for elemento in dati or []:
+                uuid = str(elemento.get("stationuuid") or "").strip()
+                if uuid:
+                    return uuid
+            return ""
+        except ErroreRadio:
+            return ""
+        except Exception as ex:
+            scrivi_log(f"RadioBrowserClient.uuid_per_indirizzo ({url})", ex)
+            return ""
+
     def registra_click(self, uuid):
         try:
             if uuid:

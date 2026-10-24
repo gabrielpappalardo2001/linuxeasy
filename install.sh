@@ -314,6 +314,12 @@ installa_pacchetti_apt() {
     installa_facoltativo "typelib GdkX11 (ripiego X11)" amministratore apt-get install -y gir1.2-gdkx11-3.0 || true
     installa_facoltativo "yt-dlp" amministratore apt-get install -y yt-dlp || true
     installa_facoltativo "ffmpeg" amministratore apt-get install -y ffmpeg || true
+    installa_facoltativo "Tesseract e poppler per il riconoscimento del testo" \
+        amministratore apt-get install -y tesseract-ocr poppler-utils || true
+    installa_facoltativo "lingua italiana di Tesseract" amministratore apt-get install -y tesseract-ocr-ita || true
+    installa_facoltativo "lingua inglese di Tesseract" amministratore apt-get install -y tesseract-ocr-eng || true
+    installa_facoltativo "dizionario italiano" amministratore apt-get install -y hunspell hunspell-it || true
+    installa_facoltativo "OpenCV e NumPy" amministratore apt-get install -y python3-opencv python3-numpy || true
 }
 
 installa_pacchetti_dnf() {
@@ -330,6 +336,12 @@ installa_pacchetti_dnf() {
     if ! amministratore dnf install -y ffmpeg; then
         installa_facoltativo "ffmpeg" amministratore dnf install -y ffmpeg-free || true
     fi
+    installa_facoltativo "Tesseract e poppler per il riconoscimento del testo" \
+        amministratore dnf install -y tesseract poppler-utils || true
+    installa_facoltativo "lingue di Tesseract" \
+        amministratore dnf install -y tesseract-langpack-ita tesseract-langpack-eng || true
+    installa_facoltativo "dizionario italiano" amministratore dnf install -y hunspell hunspell-it || true
+    installa_facoltativo "OpenCV e NumPy" amministratore dnf install -y python3-opencv python3-numpy || true
 }
 
 installa_pacchetti_pacman() {
@@ -342,6 +354,12 @@ installa_pacchetti_pacman() {
     installa_facoltativo "PyOpenGL di sistema" amministratore pacman -S --needed --noconfirm python-pyopengl || true
     installa_facoltativo "yt-dlp" amministratore pacman -S --needed --noconfirm yt-dlp || true
     installa_facoltativo "ffmpeg" amministratore pacman -S --needed --noconfirm ffmpeg || true
+    installa_facoltativo "Tesseract e poppler per il riconoscimento del testo" \
+        amministratore pacman -S --needed --noconfirm tesseract poppler || true
+    installa_facoltativo "lingue di Tesseract" \
+        amministratore pacman -S --needed --noconfirm tesseract-data-ita tesseract-data-eng || true
+    installa_facoltativo "dizionario italiano" amministratore pacman -S --needed --noconfirm hunspell hunspell-it || true
+    installa_facoltativo "OpenCV e NumPy" amministratore pacman -S --needed --noconfirm python-opencv python-numpy || true
 }
 
 installa_pacchetti_zypper() {
@@ -358,6 +376,12 @@ installa_pacchetti_zypper() {
     installa_facoltativo "PyOpenGL di sistema" amministratore zypper --non-interactive install python3-PyOpenGL || true
     installa_facoltativo "yt-dlp" amministratore zypper --non-interactive install yt-dlp || true
     installa_facoltativo "ffmpeg" amministratore zypper --non-interactive install ffmpeg || true
+    installa_facoltativo "Tesseract e poppler per il riconoscimento del testo" \
+        amministratore zypper --non-interactive install tesseract-ocr poppler-tools || true
+    installa_facoltativo "lingue di Tesseract" \
+        amministratore zypper --non-interactive install tesseract-ocr-traineddata-italian tesseract-ocr-traineddata-english || true
+    installa_facoltativo "dizionario italiano" amministratore zypper --non-interactive install hunspell myspell-it_IT || true
+    installa_facoltativo "OpenCV e NumPy" amministratore zypper --non-interactive install python3-opencv python3-numpy || true
 }
 
 trova_chromium() {
@@ -443,6 +467,59 @@ prepara_ambiente_python() {
     if [[ -f "${INSTALL_DIR}/requirements.txt" ]]; then
         installa_facoltativo "pacchetti elencati in requirements.txt" \
             come_utente "${VENV_DIR}/bin/python3" -m pip install -r "${INSTALL_DIR}/requirements.txt" || true
+    fi
+}
+
+installa_riconoscimento_pip() {
+    echo ""
+    echo "-- Moduli Python per l'analisi delle pagine con rete neurale --"
+    if ! installa_facoltativo "analisi delle pagine con rete neurale (onnxruntime e rapid-layout)" \
+        come_utente "${VENV_DIR}/bin/python3" -m pip install --upgrade onnxruntime rapid-layout; then
+        echo "Il riconoscimento del testo funzionerà comunque, con l'analisi semplice della pagina."
+    fi
+}
+
+verifica_riconoscimento_testo() {
+    echo ""
+    echo "-- Verifica del riconoscimento del testo --"
+    local esito
+    if esito="$(come_utente "${VENV_DIR}/bin/python3" - <<'PYTHON' 2>&1
+import importlib
+import shutil
+import subprocess
+import sys
+
+problemi = []
+for programma, pacchetto in (("tesseract", "tesseract-ocr"), ("pdftoppm", "poppler-utils"), ("pdftotext", "poppler-utils")):
+    if shutil.which(programma) is None:
+        problemi.append(f"manca {programma} (pacchetto {pacchetto})")
+if shutil.which("tesseract") is not None:
+    try:
+        uscita = subprocess.run(["tesseract", "--list-langs"], capture_output=True, text=True, timeout=30)
+        lingue = f"{uscita.stdout}\n{uscita.stderr}".split()
+        if "ita" not in lingue:
+            problemi.append("manca la lingua italiana di Tesseract (pacchetto tesseract-ocr-ita)")
+    except Exception as ex:
+        problemi.append(f"Tesseract non risponde: {ex}")
+if shutil.which("hunspell") is None:
+    problemi.append("manca hunspell: senza, le parole non vengono corrette con il dizionario")
+for nome, descrizione in (
+    ("cv2", "OpenCV"),
+    ("numpy", "NumPy"),
+    ("onnxruntime", "onnxruntime"),
+    ("rapid_layout", "rapid-layout"),
+):
+    try:
+        importlib.import_module(nome)
+    except Exception as ex:
+        problemi.append(f"{descrizione} non disponibile: {ex}")
+print("\n".join(problemi))
+sys.exit(1 if problemi else 0)
+PYTHON
+)"; then
+        echo "Tesseract, poppler, hunspell, OpenCV e l'analisi con rete neurale sono disponibili."
+    else
+        avviso "Riconoscimento del testo, parti mancanti: ${esito}"
     fi
 }
 
@@ -714,7 +791,9 @@ main() {
     installa_pacchetti_sistema
     prepara_applicazione
     prepara_ambiente_python
+    installa_riconoscimento_pip
     verifica_moduli_python
+    verifica_riconoscimento_testo
     verifica_browser_invisibile
     installa_collegamenti
     sistema_proprieta

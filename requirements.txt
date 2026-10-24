@@ -15,3 +15,9 @@ trafilatura>=2.1.0
 # Per usare YouTube tramite mpv serve anche yt-dlp installato a livello
 # di sistema (o via pip): mpv lo richiama internamente tramite l'hook ytdl.
 yt-dlp
+
+# Riconoscimento del testo (PDF e immagini): servono a livello di sistema
+# tesseract-ocr, tesseract-ocr-ita, poppler-utils, hunspell e hunspell-it
+# (su Debian/Ubuntu: apt install tesseract-ocr tesseract-ocr-ita poppler-utils hunspell hunspell-it python3-opencv).
+# Per l'analisi delle pagine con rete neurale lo script install.sh installa a parte,
+# in modo facoltativo: pip install onnxruntime rapid-layout

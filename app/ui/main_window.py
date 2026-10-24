@@ -38,6 +38,7 @@ from app.news.headless_browser import HeadlessBrowser
 from app.news.news_parser import NewsParser
 from app.news.news_updater import NewsUpdater
 from app.news.source_manager import SourceManager
+from app.ocr.motore_ocr import MotoreOcr
 from app.podcasts.podcast_downloads import PodcastDownloads
 from app.podcasts.podcast_notifier import PodcastNotifier
 from app.podcasts.podcast_search import PodcastSearchClient
@@ -50,6 +51,7 @@ from app.ui.librivox_view import LibriVoxView
 from app.ui import messaggi
 from app.ui.modulo_dialogo import chiedi_modulo, chiedi_testo
 from app.ui.news_view import NewsView
+from app.ui.ocr_view import OcrView
 from app.ui.pagina import PaginaTesto
 from app.ui.podcast_view import PodcastView
 from app.ui.radio_view import RadioView
@@ -150,6 +152,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self.wikipedia_client = None
         self.wikipedia_library = None
         self.wikipedia_view = None
+        self.motore_ocr = None
+        self.ocr_view = None
         self.librivox_catalog = None
         self.librivox_library = None
         self.librivox_downloads = None
@@ -241,6 +245,12 @@ class MainWindow(Gtk.ApplicationWindow):
             self.gestore_file = self._crea("gestore dei file", GestoreFile)
             if self.gestore_file is not None:
                 self.selettore_file = self._crea("selettore dei file", lambda: SelettoreFile(self, self.gestore_file))
+            self.motore_ocr = self._crea("motore di riconoscimento testo", MotoreOcr)
+            if self.motore_ocr is not None:
+                self.ocr_view = self._crea(
+                    "vista riconoscimento testo",
+                    lambda: OcrView(self, self.motore_ocr, self.selettore_file, self.impostazioni),
+                )
             if self.rubrica_store is not None:
                 self.rubrica_view = self._crea(
                     "vista rubrica",
@@ -439,6 +449,8 @@ class MainWindow(Gtk.ApplicationWindow):
                 self.librivox_downloads.ferma()
             if self.librivox_catalog is not None:
                 self.librivox_catalog.ferma()
+            if self.motore_ocr is not None:
+                self.motore_ocr.annulla()
             if self.agenda_notifier is not None:
                 self.agenda_notifier.ferma()
             if self.sincronizzazione is not None:
@@ -462,6 +474,7 @@ class MainWindow(Gtk.ApplicationWindow):
                 ("YouTube", self.open_youtube_menu, None),
                 ("LibriVox", self.open_librivox_menu, None),
                 ("Wikipedia", self.open_wikipedia_menu, None),
+                ("Riconoscimento testo", self.open_ocr_menu, None),
                 ("Agenda", self.open_agenda_menu, None),
                 ("Rubrica", self.open_rubrica_menu, None),
                 (TITOLO_CENTRO_CONTROLLO, self.open_control_center, None),
@@ -537,6 +550,15 @@ class MainWindow(Gtk.ApplicationWindow):
             self.push_menu("Menu Wikipedia", self.wikipedia_view.get_menu_items)
         except Exception as ex:
             scrivi_log("MainWindow.open_wikipedia_menu", ex)
+
+    def open_ocr_menu(self):
+        try:
+            if self.ocr_view is None:
+                self._modulo_non_disponibile("Riconoscimento testo")
+                return
+            self.push_menu("Menu Riconoscimento testo", self.ocr_view.get_menu_items)
+        except Exception as ex:
+            scrivi_log("MainWindow.open_ocr_menu", ex)
 
     def open_agenda_menu(self):
         try:
@@ -1763,6 +1785,8 @@ class MainWindow(Gtk.ApplicationWindow):
                 totale = len(self.podcast_downloads.in_corso())
                 if totale:
                     elenco.append(f"{totale} download di episodi" if totale > 1 else "1 download di episodio")
+            if self.motore_ocr is not None and self.motore_ocr.in_corso:
+                elenco.append("il riconoscimento di un documento")
             if self.sincronizzazione is not None and self.sincronizzazione.in_corso():
                 elenco.append("la sincronizzazione tra computer")
         except Exception as ex:

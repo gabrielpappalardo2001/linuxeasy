@@ -104,7 +104,6 @@ class Aggiornatore:
             scrivi_log("Aggiornatore: git non è installato, controllo degli aggiornamenti impossibile.")
             return False
         if not os.access(str(self.cartella_programma), os.W_OK):
-            scrivi_log(f"Aggiornatore: la cartella {self.cartella_programma} non è scrivibile, aggiornamento impossibile.")
             return False
         return True
 

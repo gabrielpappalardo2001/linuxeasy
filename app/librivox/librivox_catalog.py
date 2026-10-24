@@ -22,6 +22,9 @@ API_LIBRI = "https://librivox.org/api/feed/audiobooks/"
 API_TRACCE = "https://librivox.org/api/feed/audiotracks/"
 RSS_LIBRO = "https://librivox.org/rss/{id}"
 PAGINA_CATALOGO = 1000
+FORMA_ELENCO = "elenco"
+FORMA_GRAFFE = "graffe"
+FORMA_NESSUNA = "nessuna"
 MASSIMO_PAGINE = 200
 TENTATIVI = 3
 PAUSA_TENTATIVO = 4
@@ -542,10 +545,16 @@ class LibriVoxCatalog:
             scrivi_log("LibriVoxCatalog._consegna", ex)
         return False
 
-    def _pagina(self, offset, con_campi=True):
+    def _parametri_pagina(self, offset, forma):
         parametri = [("format", "json"), ("limit", PAGINA_CATALOGO), ("offset", offset)]
-        if con_campi:
+        if forma == FORMA_ELENCO:
             parametri.extend(("fields[]", campo) for campo in CAMPI_CATALOGO)
+        elif forma == FORMA_GRAFFE:
+            parametri.append(("fields", "{" + ",".join(CAMPI_CATALOGO) + "}"))
+        return parametri
+
+    def _pagina(self, offset, forma=FORMA_ELENCO):
+        parametri = self._parametri_pagina(offset, forma)
         ultimo_errore = None
         for tentativo in range(TENTATIVI):
             if self._fermo.is_set():
@@ -555,6 +564,8 @@ class LibriVoxCatalog:
                 return _elenco(dati.get("books"))
             except Exception as ex:
                 ultimo_errore = ex
+                if "Errore HTTP 4" in str(ex):
+                    raise ErroreLibriVox(f"Pagina del catalogo rifiutata dal server ({forma}): {ex}") from ex
                 scrivi_log(f"LibriVoxCatalog._pagina tentativo {tentativo + 1} (offset {offset})", ex)
                 if tentativo + 1 < TENTATIVI:
                     self._annota(
@@ -564,17 +575,35 @@ class LibriVoxCatalog:
                     return []
         raise ErroreLibriVox(f"Pagina del catalogo non scaricata: {ultimo_errore}")
 
+    def _prima_pagina(self):
+        forme = (FORMA_ELENCO, FORMA_GRAFFE, FORMA_NESSUNA)
+        ultimo_errore = None
+        for forma in forme:
+            if self._fermo.is_set():
+                return FORMA_NESSUNA, []
+            try:
+                pagina = self._pagina(0, forma)
+                if pagina and forma != FORMA_NESSUNA and all("authors" not in elemento for elemento in pagina[:20]):
+                    continue
+                return forma, pagina
+            except ErroreLibriVox as ex:
+                ultimo_errore = ex
+                scrivi_log(f"LibriVoxCatalog._prima_pagina forma {forma}", ex)
+                if "rifiutata dal server" not in str(ex):
+                    raise
+        if ultimo_errore is not None:
+            raise ultimo_errore
+        return FORMA_NESSUNA, self._pagina(0, FORMA_NESSUNA)
+
     def scarica_catalogo(self):
         libri = {}
         try:
-            con_campi = True
+            forma, pagina = self._prima_pagina()
             for numero in range(MASSIMO_PAGINE):
                 if self._fermo.is_set():
                     break
-                pagina = self._pagina(numero * PAGINA_CATALOGO, con_campi)
-                if numero == 0 and pagina and con_campi and all("authors" not in elemento for elemento in pagina[:20]):
-                    con_campi = False
-                    pagina = self._pagina(0, False)
+                if numero > 0:
+                    pagina = self._pagina(numero * PAGINA_CATALOGO, forma)
                 for elemento in pagina:
                     if isinstance(elemento, dict):
                         identificativo = _intero(elemento.get("id"))

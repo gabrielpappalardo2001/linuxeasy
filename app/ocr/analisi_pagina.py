@@ -1,5 +1,8 @@
+import contextlib
 import gc
 import importlib.util
+import os
+import sys
 from dataclasses import dataclass
 
 from app.core.log import scrivi_log
@@ -41,6 +44,36 @@ class Zona:
 
     def area(self):
         return self.larghezza() * self.altezza()
+
+
+@contextlib.contextmanager
+def errori_silenziosi():
+    salvato = None
+    nullo = None
+    try:
+        try:
+            sys.stderr.flush()
+        except Exception as ex:
+            scrivi_log("analisi_pagina.errori_silenziosi flush", ex)
+        salvato = os.dup(2)
+        nullo = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(nullo, 2)
+    except Exception as ex:
+        scrivi_log("analisi_pagina.errori_silenziosi avvio", ex)
+    try:
+        yield
+    finally:
+        try:
+            if salvato is not None:
+                os.dup2(salvato, 2)
+        except Exception as ex:
+            scrivi_log("analisi_pagina.errori_silenziosi ripristino", ex)
+        for descrittore in (nullo, salvato):
+            try:
+                if descrittore is not None:
+                    os.close(descrittore)
+            except Exception as ex:
+                scrivi_log("analisi_pagina.errori_silenziosi chiusura", ex)
 
 
 def memoria_disponibile_mb():
@@ -222,13 +255,14 @@ class AnalizzatoreLayout:
         try:
             if self._motore is not None:
                 return True
-            from rapid_layout import RapidLayout
+            with errori_silenziosi():
+                from rapid_layout import RapidLayout
 
-            self._motore = RapidLayout(
-                model_type=MODELLO_LAYOUT,
-                conf_thresh=SOGLIA_CONFIDENZA_LAYOUT,
-                iou_thresh=0.5,
-            )
+                self._motore = RapidLayout(
+                    model_type=MODELLO_LAYOUT,
+                    conf_thresh=SOGLIA_CONFIDENZA_LAYOUT,
+                    iou_thresh=0.5,
+                )
             return True
         except Exception as ex:
             scrivi_log("AnalizzatoreLayout.carica", ex)
@@ -255,7 +289,8 @@ class AnalizzatoreLayout:
                 return None
             altezza, larghezza = immagine.shape[:2]
             colori = cv2.cvtColor(immagine, cv2.COLOR_GRAY2BGR)
-            risultato = self._motore(colori)
+            with errori_silenziosi():
+                risultato = self._motore(colori)
             del colori
             zone = self._zone_da_risultato(risultato, larghezza, altezza)
             zone = self._elimina_testo_nelle_immagini(zone)

@@ -1,3 +1,4 @@
+import os
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -482,6 +483,8 @@ class Database:
                 return str(percorso)
             if percorso.exists():
                 return str(percorso.resolve())
+            if not os.access(str(CARTELLA_PROGETTO), os.W_OK):
+                return str(Path.home() / ".local" / "share" / "linux-easy" / percorso)
             return str(CARTELLA_PROGETTO / percorso)
         except Exception as ex:
             scrivi_log(f"Database._risolvi_percorso ({db_path})", ex)

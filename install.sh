@@ -18,7 +18,7 @@ ICON_FILE=""
 DESKTOP_FILE_NAME="linux-easy.desktop"
 LOG_DIR=""
 LOG_FILE=""
-PACCHETTI_PIP=(python-mpv feedparser trafilatura requests PyOpenGL)
+PACCHETTI_PIP=(python-mpv feedparser trafilatura requests PyOpenGL yt-dlp yt-dlp-ejs)
 ESEGUIBILI_CHROMIUM=(chromium-browser chromium google-chrome google-chrome-stable)
 TEMPO_MASSIMO_PLAYWRIGHT=900
 AVVISI=()
@@ -470,6 +470,15 @@ prepara_ambiente_python() {
     fi
 }
 
+installa_strumenti_youtube() {
+    echo ""
+    echo "-- yt-dlp aggiornato e deno per YouTube --"
+    if ! installa_facoltativo "yt-dlp aggiornato e deno (necessari per riprodurre YouTube)" \
+        come_utente env PYTHONPATH="${INSTALL_DIR}" "${VENV_DIR}/bin/python3" -m app.core.strumenti_youtube; then
+        echo "Verranno installati dal programma al primo avvio."
+    fi
+}
+
 installa_riconoscimento_pip() {
     echo ""
     echo "-- Moduli Python per l'analisi delle pagine con rete neurale --"
@@ -676,7 +685,7 @@ scrivi_comando() {
     come_utente mkdir -p "${BIN_DIR}"
     scrivi_file_utente "${COMANDO}" <<COMANDO_AVVIO
 #!/usr/bin/env bash
-export PATH="\${PATH}:/snap/bin:${BIN_DIR}"
+export PATH="${VENV_DIR}/bin:\${PATH}:/snap/bin:${BIN_DIR}"
 mkdir -p "${LOG_DIR}"
 cd "${INSTALL_DIR}" || exit 1
 exec "${VENV_DIR}/bin/python3" "${INSTALL_DIR}/main.py" "\$@" 2>>"${LOG_DIR}/linux-easy-avvio.log"
@@ -792,6 +801,7 @@ main() {
     prepara_applicazione
     prepara_ambiente_python
     installa_riconoscimento_pip
+    installa_strumenti_youtube
     verifica_moduli_python
     verifica_riconoscimento_testo
     verifica_browser_invisibile

@@ -4,6 +4,13 @@ installa_gestori_globali()
 
 import sys
 
+try:
+    from app.core import strumenti_youtube
+
+    strumenti_youtube.prepara_ambiente()
+except Exception as ex_strumenti:
+    scrivi_log("main.prepara_ambiente_youtube", ex_strumenti)
+
 import gi
 
 gi.require_version("Gtk", "3.0")
@@ -57,6 +64,10 @@ class Application(Gtk.Application):
 
 def main():
     try:
+        try:
+            strumenti_youtube.avvia_manutenzione()
+        except Exception as ex_manutenzione:
+            scrivi_log("main.avvia_manutenzione", ex_manutenzione)
         return Application().run(sys.argv)
     except Exception as ex:
         scrivi_log("main", ex)
